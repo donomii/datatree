@@ -34,10 +34,11 @@ type RangeResp struct {
 }
 
 type Resource struct {
-	Name string `json:"name"`
-	Kind string `json:"kind"`
-	Size int64  `json:"size"`
-	Key  string `json:"key,omitempty"`
+	Name     string `json:"name"`
+	Kind     string `json:"kind"`
+	Size     int64  `json:"size"`
+	Key      string `json:"key,omitempty"`
+	Readable bool   `json:"readable,omitempty"`
 }
 
 type ResourcesMsg struct {
@@ -63,6 +64,13 @@ type ListFunc func(raw []byte) ([]Resource, map[string][]byte, error)
 // driver whose listing produced no servable children is a leaf: it exits
 // immediately after emitting, matching the driver protocol's leaf rule.
 func Run(name string, list ListFunc) {
+	RunWithReader(name, list, func(_ string, value []byte, offset int64, length int64) ([]byte, error) {
+		return SliceRange(value, offset, length), nil
+	})
+}
+
+// RunWithReader resolves lazy children through the ordinary byte protocol.
+func RunWithReader(name string, list ListFunc, read func(string, []byte, int64, int64) ([]byte, error)) {
 	defer RecoverPanic(name)
 
 	enc := json.NewEncoder(os.Stdout)
@@ -72,6 +80,7 @@ func Run(name string, list ListFunc) {
 	switch {
 	case fetchErr != nil:
 		fmt.Fprintf(os.Stderr, "%s cannot start: %v\n", name, fetchErr)
+		EmitError(enc, fetchErr.Error())
 		return
 	default:
 	}
@@ -84,6 +93,20 @@ func Run(name string, list ListFunc) {
 	default:
 	}
 
+	for index := range resources {
+		key := resources[index].Key
+		switch {
+		case key == "":
+			key = resources[index].Name
+		default:
+		}
+		switch resources[index].Kind {
+		case "aws", "github", "directory", "git", "hardware", "usb", "kubernetes":
+			resources[index].Readable = false
+		default:
+			_, resources[index].Readable = children[key]
+		}
+	}
 	switch err := enc.Encode(ResourcesMsg{Resources: resources}); {
 	case err != nil:
 		fmt.Fprintf(os.Stderr, "%s failed to encode %d resources: %v\n", name, len(resources), err)
@@ -96,7 +119,7 @@ func Run(name string, list ListFunc) {
 		// Leaf listing: nothing is servable, so exit instead of lingering.
 		return
 	default:
-		ServeChildren(enc, dec, children)
+		ServeChildrenWithReader(enc, dec, children, read)
 	}
 }
 
@@ -129,13 +152,24 @@ func FetchUpstreamBytes(enc *json.Encoder, dec *json.Decoder) ([]byte, error) {
 	case err != nil:
 		return nil, fmt.Errorf("cannot decode the payload: expected base64 bytes from the parent driver, got decode error: %v", err)
 	default:
-		return raw, nil
+		switch message, isError := DecodeDriverReadError(raw); {
+		case isError:
+			return nil, fmt.Errorf("cannot read upstream data: %s", message)
+		default:
+			return raw, nil
+		}
 	}
 }
 
 // ServeChildren answers range requests by handing back the stored raw bytes of
 // the requested child, honoring offset and length with -1 meaning "to the end".
 func ServeChildren(enc *json.Encoder, dec *json.Decoder, children map[string][]byte) {
+	ServeChildrenWithReader(enc, dec, children, func(_ string, value []byte, offset int64, length int64) ([]byte, error) {
+		return SliceRange(value, offset, length), nil
+	})
+}
+
+func ServeChildrenWithReader(enc *json.Encoder, dec *json.Decoder, children map[string][]byte, read func(string, []byte, int64, int64) ([]byte, error)) {
 	for {
 		var req RangeReq
 		switch err := dec.Decode(&req); {
@@ -154,7 +188,13 @@ func ServeChildren(enc *json.Encoder, dec *json.Decoder, children map[string][]b
 		case req.Child == "" || !known:
 			SendRange(enc, nil)
 		default:
-			SendRange(enc, SliceRange(value, req.Offset, req.Length))
+			data, err := read(req.Child, value, req.Offset, req.Length)
+			switch {
+			case err != nil:
+				SendRange(enc, EncodeDriverReadError(err.Error()))
+			default:
+				SendRange(enc, data)
+			}
 		}
 	}
 }
@@ -496,7 +536,8 @@ func TopFields(raw []byte) (map[string]json.RawMessage, error) {
 // ListGenericJSON browses an arbitrary JSON document as a tree: objects list
 // their keys (sorted for stable output), arrays list their elements as [i],
 // and each object/array value becomes an expandable "json" child while each
-// scalar becomes a "kv" leaf shown as "key: value".
+// scalar becomes a "kv" leaf shown as "key: value". All values retain their
+// serialized bytes for download and explicit filter composition.
 func ListGenericJSON(raw []byte) ([]Resource, map[string][]byte, error) {
 	switch message, isReadError := DecodeDriverReadError(raw); {
 	case isReadError:
@@ -530,13 +571,9 @@ func listObjectFields(raw []byte) ([]Resource, map[string][]byte, error) {
 	var resources []Resource
 	children := map[string][]byte{}
 	for _, name := range names {
-		resource, servable := DescribeChild(name, fields[name])
+		resource, _ := DescribeChild(name, fields[name])
 		resources = append(resources, resource)
-		switch {
-		case servable:
-			children[resource.Name] = TrimmedBytes(fields[name])
-		default:
-		}
+		children[resource.Name] = TrimmedBytes(fields[name])
 	}
 	return resources, children, nil
 }
@@ -552,13 +589,9 @@ func listArrayElements(raw []byte) ([]Resource, map[string][]byte, error) {
 	children := map[string][]byte{}
 	for index, value := range elements {
 		key := "[" + strconv.Itoa(index) + "]"
-		resource, servable := DescribeChild(key, value)
+		resource, _ := DescribeChild(key, value)
 		resources = append(resources, resource)
-		switch {
-		case servable:
-			children[resource.Name] = TrimmedBytes(value)
-		default:
-		}
+		children[resource.Name] = TrimmedBytes(value)
 	}
 	return resources, children, nil
 }
@@ -574,7 +607,7 @@ func listScalar(raw []byte) ([]Resource, map[string][]byte, error) {
 	case !json.Valid(trimmed):
 		return nil, nil, fmt.Errorf("cannot parse JSON document: expected an object, array, or scalar, got %d bytes that are not valid JSON: %.80q", len(raw), string(trimmed))
 	default:
-		return []Resource{{Name: RenderScalar(trimmed), Kind: "kv", Size: int64(len(trimmed))}}, map[string][]byte{}, nil
+		return []Resource{{Name: RenderScalar(trimmed), Kind: "kv", Size: int64(len(trimmed))}}, map[string][]byte{RenderScalar(trimmed): trimmed}, nil
 	}
 }
 

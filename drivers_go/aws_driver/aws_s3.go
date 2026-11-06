@@ -102,7 +102,14 @@ func listS3Objects(config awsConfig, state mountState) ([]driverlib.Resource, ma
 			return err
 		default:
 			key := fmt.Sprintf("entry-%d", len(resources))
-			resources = append(resources, driverlib.Resource{Name: name, Kind: "aws", Size: size, Key: key})
+			kind := "aws"
+			switch next.View {
+			case viewS3Object:
+				key = "s3-bytes:" + key
+				kind = driverlib.KindForName(next.Key)
+			default:
+			}
+			resources = append(resources, driverlib.Resource{Name: name, Kind: kind, Size: size, Key: key})
 			children[key] = raw
 			return nil
 		}
@@ -128,7 +135,7 @@ func listS3Objects(config awsConfig, state mountState) ([]driverlib.Resource, ma
 		default:
 			next := state
 			next.View, next.Key, next.Token = viewS3Object, object.Key, ""
-			switch err := add(strings.TrimPrefix(object.Key, state.Key)+" [object]", *object.Size, next); {
+			switch err := add(strings.TrimPrefix(object.Key, state.Key), *object.Size, next); {
 			case err != nil:
 				return nil, nil, err
 			default:
@@ -166,22 +173,4 @@ func listS3Objects(config awsConfig, state mountState) ([]driverlib.Resource, ma
 	default:
 	}
 	return resources, children, nil
-}
-
-func readS3Object(config awsConfig, state mountState) ([]driverlib.Resource, map[string][]byte, error) {
-	out, err := runReadOnlyAWS(config, s3ReadArgs(state))
-	switch {
-	case err != nil:
-		return nil, nil, err
-	default:
-		kind := driverlib.KindForName(state.Key)
-		switch {
-		case kind == "file" && json.Valid(out):
-			kind = "json"
-		case kind == "file" && utf8.Valid(out):
-			kind = "text"
-		default:
-		}
-		return []driverlib.Resource{{Name: state.Key, Kind: kind, Size: int64(len(out)), Key: "content"}}, map[string][]byte{"content": out}, nil
-	}
 }

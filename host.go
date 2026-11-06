@@ -23,6 +23,7 @@ import (
 	csvdriver "datahumper/drivers_go/csv_driver"
 	diffdriver "datahumper/drivers_go/diff_driver"
 	directorydriver "datahumper/drivers_go/directory_driver"
+	"datahumper/drivers_go/driverlib"
 	gitdriver "datahumper/drivers_go/git_driver"
 	githubdriver "datahumper/drivers_go/github_driver"
 	htmldriver "datahumper/drivers_go/html_driver"
@@ -74,11 +75,12 @@ type RangeResp struct {
 }
 
 type Resource struct {
-	Name   string `json:"name"`
-	Kind   string `json:"kind"`
-	Size   int64  `json:"size"`
-	Key    string `json:"key,omitempty"`
-	Handle string `json:"handle,omitempty"`
+	Name     string `json:"name"`
+	Kind     string `json:"kind"`
+	Size     int64  `json:"size"`
+	Key      string `json:"key,omitempty"`
+	Handle   string `json:"handle,omitempty"`
+	Readable bool   `json:"readable,omitempty"`
 }
 
 type ResourcesMsg struct {
@@ -727,10 +729,11 @@ func (s *Store) loadRootDriver() (resources []Resource, err error) {
 				}
 				hid := s.addHandle(h)
 				resources = append(resources, Resource{
-					Name:   r.Name,
-					Kind:   r.Kind,
-					Size:   r.Size,
-					Handle: hid,
+					Name:     r.Name,
+					Kind:     r.Kind,
+					Size:     r.Size,
+					Handle:   hid,
+					Readable: r.Readable,
 				})
 			}
 			s.mu.Lock()
@@ -789,10 +792,11 @@ func (s *Store) loadDriverForHandle(driverName string, handle ChildHandle) (reso
 				}
 				hid := s.addHandle(h)
 				resources = append(resources, Resource{
-					Name:   r.Name,
-					Kind:   r.Kind,
-					Size:   r.Size,
-					Handle: hid,
+					Name:     r.Name,
+					Kind:     r.Kind,
+					Size:     r.Size,
+					Handle:   hid,
+					Readable: r.Readable,
 				})
 			}
 			return resources, nil
@@ -856,10 +860,11 @@ func (s *Store) loadDriverForBlob(driverName string, blobID string) (resources [
 				}
 				hid := s.addHandle(h)
 				resources = append(resources, Resource{
-					Name:   r.Name,
-					Kind:   r.Kind,
-					Size:   r.Size,
-					Handle: hid,
+					Name:     r.Name,
+					Kind:     r.Kind,
+					Size:     r.Size,
+					Handle:   hid,
+					Readable: r.Readable,
 				})
 			}
 			loaded = true
@@ -1267,6 +1272,12 @@ func main() {
 		if err != nil {
 			http.Error(w, err.Error(), 500)
 			return
+		}
+		switch message, isError := driverlib.DecodeDriverReadError(chunk); {
+		case isError:
+			http.Error(w, message, http.StatusBadGateway)
+			return
+		default:
 		}
 		w.Header().Set("Content-Type", "application/octet-stream")
 		w.Header().Set("Content-Length", strconv.Itoa(len(chunk)))

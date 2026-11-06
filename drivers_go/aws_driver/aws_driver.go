@@ -71,7 +71,7 @@ const actionIAMTrust = "aws-action-iam-update-trust"
 const actionIAMPolicyVersion = "aws-action-iam-policy-version"
 
 func Run() {
-	driverlib.Run("AWS driver", buildAWSView)
+	driverlib.RunWithReader("AWS driver", buildAWSView, readAWSChild)
 }
 
 func buildAWSView(raw []byte) ([]driverlib.Resource, map[string][]byte, error) {
@@ -90,8 +90,6 @@ func buildAWSView(raw []byte) ([]driverlib.Resource, map[string][]byte, error) {
 	switch state.View {
 	case viewS3Objects:
 		return listS3Objects(config, state)
-	case viewS3Object:
-		return readS3Object(config, state)
 	case viewData:
 		return listAWSData(config, state)
 	case viewRoot:

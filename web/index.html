@@ -177,6 +177,13 @@
             body: JSON.stringify({session: data.session})
           });
           if (response.ok) {
+            for (const node of [subContainer, ...subContainer.querySelectorAll('.tree')]) {
+              if (node.previewURL) {
+                URL.revokeObjectURL(node.previewURL);
+              } else {
+                // Text previews allocate no blob URLs.
+              }
+            }
             subContainer.remove();
             status.textContent = `Closed ${file.name} and released its retained upload`;
           } else {
@@ -186,6 +193,7 @@
           }
         };
         subContainer.appendChild(unloadButton);
+        await appendContentPreview(subContainer, {name: file.name, kind: driver.replace('_driver', ''), size: file.size}, null, file);
         const treeContents = document.createElement('div');
         subContainer.appendChild(treeContents);
         if (data.resources && data.resources.length > 0) {
@@ -228,6 +236,10 @@
       
       // All attempts failed
       document.getElementById('loader').textContent = 'Error loading directory - root driver may not be ready';
+    }
+
+    function hasContentBytes(resource) {
+      return !isAction(resource.kind) && !['error', 'url', 'directory', 'git', 'aws', 'github', 'hardware', 'usb', 'kubernetes'].includes(resource.kind) && (resource.readable || ['archive', 'zip', 'file', 'text', 'json', 'image', 'pdf', 'html', 'csv', 'diff'].includes(resource.kind));
     }
 
     function renderDirectory(container, resources, parentPath = null) {
@@ -320,7 +332,7 @@
           item.appendChild(nameSpan);
         }
 
-        if (handle && !isAction(r.kind) && r.kind !== 'url' && r.kind !== 'directory' && r.kind !== 'git' && r.kind !== 'github' && r.kind !== 'aws' && r.kind !== 'hardware' && r.kind !== 'usb' && r.kind !== 'diff' && !r.kind.startsWith('diff-') && r.kind !== 'kubernetes' && r.kind !== 'error' && r.kind !== 'kv') {
+        if (handle && hasContentBytes(r)) {
           const download = document.createElement('a');
           download.className = 'download';
           download.href = `/api/data?handle=${encodeURIComponent(handle)}&offset=0&length=-1`;
@@ -332,6 +344,26 @@
         }
 
         container.appendChild(item);
+        if (handle && hasContentBytes(r)) {
+          const filter = document.createElement('select');
+          filter.title = 'Choose a filter to interpret these bytes; its children can be filtered again';
+          filter.setAttribute('aria-label', `Filter for ${name}`);
+          for (const option of document.getElementById('upload-driver').options) {
+            filter.appendChild(option.cloneNode(true));
+          }
+          const defaultDriver = {archive: 'zip_driver', zip: 'zip_driver', kv: 'text_driver', file: 'text_driver'}[r.kind] || `${r.kind}_driver`;
+          filter.value = Array.from(filter.options).some(option => option.value === defaultDriver) ? defaultDriver : 'text_driver';
+          const apply = document.createElement('button');
+          apply.textContent = 'Apply filter';
+          apply.title = 'Read this resource through the selected filter, regardless of its filename or provider';
+          apply.onclick = async event => {
+            event.stopPropagation();
+            await expandResource(item, r, handle, name, itemPath, false, filter.value);
+          };
+          item.append(filter, apply);
+        } else {
+          // Action controls and metadata without bytes are not filter inputs.
+        }
         rendered.push({item: item, resource: r, handle: handle, name: name, path: itemPath});
       });
       return rendered;
@@ -753,16 +785,64 @@
       }
     }
 
-    async function appendContentPreview(container, resource, handle) {
+    async function appendPagedContent(container, resource, handle, blob = null) {
+      const pageSize = 65536;
+      let offset = 0;
+      const preview = document.createElement('pre');
+      preview.style.cssText = 'white-space:pre-wrap;overflow-wrap:anywhere;max-height:60vh;overflow:auto';
+      preview.title = 'Exact file bytes as UTF-8 text, or hexadecimal for binary data and split UTF-8 sequences; HTML scripts are not executed';
+      const previous = document.createElement('button');
+      previous.textContent = 'Previous bytes';
+      previous.title = 'Read the preceding 64 KiB of this resource';
+      const next = document.createElement('button');
+      next.textContent = 'Next bytes';
+      next.title = 'Read the next 64 KiB; continue until the end of the resource';
+      const position = document.createElement('span');
+      position.title = 'Zero-based byte range currently shown; filters still receive the complete resource';
+      async function showPage(start) {
+        previous.disabled = next.disabled = true;
+        try {
+          const response = blob ? new Response(blob.slice(start, start + pageSize)) : await fetch(`/api/data?handle=${encodeURIComponent(handle)}&offset=${start}&length=${pageSize}`);
+          if (!response.ok) {
+            throw new Error(await response.text());
+          } else {
+            const bytes = await response.arrayBuffer();
+            offset = start;
+            try {
+              preview.textContent = new TextDecoder('utf-8', {fatal: true}).decode(bytes);
+            } catch (error) {
+              preview.textContent = 'Exact bytes (hexadecimal):\n' + Array.from(new Uint8Array(bytes), byte => byte.toString(16).padStart(2, '0')).join(' ');
+            }
+            position.textContent = bytes.byteLength ? ` Bytes ${offset}–${offset + bytes.byteLength - 1} ` : ` End of data at byte ${offset} `;
+            previous.disabled = offset === 0;
+            next.disabled = bytes.byteLength < pageSize;
+          }
+        } catch (error) {
+          position.textContent = `Cannot read content: ${error.message}`;
+          previous.disabled = offset === 0;
+          next.disabled = false;
+        }
+      }
+      previous.onclick = () => showPage(Math.max(0, offset - pageSize));
+      next.onclick = () => showPage(offset + pageSize);
+      container.append(previous, position, next, preview);
+      await showPage(0);
+    }
+
+    async function appendContentPreview(container, resource, handle, blob = null) {
+      if (['text', 'file', 'html', 'json', 'csv'].includes(resource.kind)) {
+        await appendPagedContent(container, resource, handle, blob);
+        return true;
+      } else {
+        // Media formats are rendered by the browser from complete bytes.
+      }
       if (['text', 'file', 'html', 'image', 'pdf'].includes(resource.kind)) {
-        const response = await fetch(`/api/data?handle=${encodeURIComponent(handle)}&offset=0&length=8388609`);
+        const response = blob ? new Response(blob) : await fetch(`/api/data?handle=${encodeURIComponent(handle)}&offset=0&length=-1`);
         if (!response.ok) {
           throw new Error(`Cannot read content: ${await response.text()}`);
         } else {
           const bytes = await response.arrayBuffer();
-          if (bytes.byteLength > 8388608) {
-            throw new Error('Inline preview exceeds 8 MiB; use download to read the complete file.');
-          } else if (resource.kind === 'image' || resource.kind === 'pdf') {
+          if (resource.kind === 'image' || resource.kind === 'pdf') {
             const type = resource.kind === 'pdf' ? 'application/pdf' : '';
             const url = URL.createObjectURL(new Blob([bytes], {type}));
             const media = document.createElement(resource.kind === 'image' ? 'img' : 'iframe');
@@ -789,7 +869,7 @@
       }
     }
 
-    async function expandResource(item, resource, handle, name, path, recursively = false) {
+    async function expandResource(item, resource, handle, name, path, recursively = false, selectedDriver = null) {
       const next = item.nextSibling;
       if (next && next.className === 'tree') {
         if (recursively) {
@@ -806,7 +886,11 @@
           next.remove();
           setExpansionState(item, false);
         }
-        return;
+        if (selectedDriver === null || recursively) {
+          return;
+        } else {
+          // Applying a filter replaces this view with a fresh interpretation.
+        }
       }
 
       const subContainer = document.createElement('div');
@@ -820,10 +904,10 @@
       setExpansionState(item, true);
 
       try {
-        const response = await fetch('/api/autoLoad', {
+        const response = await fetch(selectedDriver ? '/api/loadChild' : '/api/autoLoad', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({handle: handle, kind: resource.kind})
+          body: JSON.stringify({handle: handle, kind: resource.kind, driver: selectedDriver || undefined})
         });
         
         if (!response.ok) {
@@ -835,7 +919,8 @@
         
         const data = await response.json();
         header.textContent = `${name} (${data.driver})`;
-        const hasPreview = await appendContentPreview(subContainer, resource, handle);
+        const previewResource = selectedDriver ? {...resource, kind: selectedDriver.replace('_driver', '')} : resource;
+        const hasPreview = await appendContentPreview(subContainer, previewResource, handle);
         
         if (data.resources && data.resources.length > 0) {
           const contentDiv = document.createElement('div');

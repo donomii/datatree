@@ -76,15 +76,20 @@ func TestS3BucketPrefixesObjectsAndReadableBytes(t *testing.T) {
 	resources, children := mustBuildAWSView(t, raw)
 	prefix := dataChild(t, resources, children, "docs/")
 	objects, objectChildren := mustBuildAWSView(t, prefix)
-	object := dataChild(t, objects, objectChildren, "report.json [object]")
-	content, contentChildren := mustBuildAWSView(t, object)
-	bytes := dataChild(t, content, contentChildren, "docs/report.json")
+	object := dataChild(t, objects, objectChildren, "report.json")
+	content := objects
+	bytes, readErr := readAWSChild(objects[0].Key, object, 0, -1)
+	switch {
+	case readErr != nil:
+		t.Fatal(readErr)
+	default:
+	}
 	switch {
 	case string(bytes) != `{"answer":42}` || content[0].Kind != "json":
 		t.Fatalf("expected actual JSON object bytes, got %q with %+v", bytes, content)
 	default:
 	}
-	dataChild(t, resources, children, "[actions] [object]")
+	dataChild(t, resources, children, "[actions]")
 	dataChild(t, resources, children, resourceActionsEntryName)
 	var page mountState
 	switch err := json.Unmarshal(dataChild(t, resources, children, "[next page]"), &page); {
@@ -95,14 +100,14 @@ func TestS3BucketPrefixesObjectsAndReadableBytes(t *testing.T) {
 	default:
 	}
 	last, lastChildren := mustBuildAWSView(t, dataChild(t, resources, children, "[next page]"))
-	dataChild(t, last, lastChildren, "last.txt [object]")
+	dataChild(t, last, lastChildren, "last.txt")
 	for _, test := range []struct{ key, expected, kind string }{{"plain.txt", "hello", "text"}, {"empty.txt", "", "text"}} {
 		state.View, state.Key = viewS3Object, test.key
 		raw, _ := encodeMountState(state)
-		resources, children := mustBuildAWSView(t, raw)
+		data, err := readAWSChild("s3-bytes:test", raw, 0, -1)
 		switch {
-		case resources[0].Kind != test.kind || string(children["content"]) != test.expected:
-			t.Fatalf("wrong content for %q: %+v %q", test.key, resources, children["content"])
+		case err != nil || string(data) != test.expected:
+			t.Fatalf("wrong content for %q: %q %v", test.key, data, err)
 		default:
 		}
 	}
@@ -112,7 +117,13 @@ func TestS3ErrorsAreVisibleAndOutputIsBounded(t *testing.T) {
 	fakeDataAWS(t)
 	for _, test := range []struct{ view, key, expected string }{{viewS3Objects, "denied/", "AccessDenied"}, {viewS3Object, "denied.txt", "AccessDenied"}, {viewS3Objects, "invalid/", "non-negative size"}} {
 		raw, _ := encodeMountState(mountState{View: test.view, Profile: "default", Region: "us-east-1", Operation: "s3-buckets", Identifier: "example-bucket", Key: test.key})
-		_, _, err := buildAWSView(raw)
+		var err error
+		switch test.view {
+		case viewS3Object:
+			_, err = readAWSChild("s3-bytes:test", raw, 0, -1)
+		default:
+			_, _, err = buildAWSView(raw)
+		}
 		switch {
 		case err == nil || !strings.Contains(err.Error(), test.expected):
 			t.Fatalf("expected %s for %s, got %v", test.expected, test.key, err)
@@ -121,11 +132,22 @@ func TestS3ErrorsAreVisibleAndOutputIsBounded(t *testing.T) {
 	}
 	t.Setenv("DATATREE_AWS_MAX_OUTPUT_BYTES", "4")
 	raw, _ := encodeMountState(mountState{View: viewS3Object, Profile: "default", Region: "us-east-1", Operation: "s3-buckets", Identifier: "example-bucket", Key: "large.txt"})
-	_, _, err := buildAWSView(raw)
+	data, err := readAWSChild("s3-bytes:test", raw, 0, -1)
 	switch {
-	case err == nil || !strings.Contains(err.Error(), "exceeding"):
-		t.Fatalf("expected bounded read error, got %v", err)
+	case err != nil || string(data) != "0123456789":
+		t.Fatalf("metadata limit must not cut off file bytes, got %q %v", data, err)
 	default:
+	}
+	for _, test := range []struct {
+		offset, length int64
+		expected       string
+	}{{2, 4, "2345"}, {8, -1, "89"}, {50, 4, ""}, {-1, 4, ""}, {0, 0, ""}} {
+		part, err := readAWSChild("s3-bytes:test", raw, test.offset, test.length)
+		switch {
+		case err != nil || string(part) != test.expected:
+			t.Fatalf("S3 range offset=%d length=%d: expected %q, got %q: %v", test.offset, test.length, test.expected, part, err)
+		default:
+		}
 	}
 }
 

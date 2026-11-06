@@ -447,14 +447,14 @@ Content browsing extension:
 S3 bucket or prefix:
     validate profile, region, bucket, opaque prefix and optional page token
     list objects and common prefixes using delimiter slash
-    expose prefixes as nested views and objects as lazy views with actual sizes
+    expose prefixes as nested views and objects as ordinary file resources with actual kinds and sizes
     distinguish reserved controls with unique internal keys
     expose returned continuation as next-page child and preserve bucket actions
 
 S3 object:
     allow only exact remote-object to stdout copy
-    read actual bytes under the AWS output bound
-    emit a content child classified by filename, JSON validity or UTF-8 validity
+    read actual file bytes independently of the CLI metadata limit
+    resolve provider descriptors internally and serve file bytes directly to downstream filters
     serve bytes through existing range protocol for nested drivers and download
     report permission, size and validation failures as visible errors
 
@@ -468,9 +468,13 @@ AWS data query:
     explicitly report database-connection and state-changing SQS limitations
 
 Browser preview:
-    expanding text, HTML, binary, image or PDF also reads its content handle
-    reject inline previews larger than 8 MiB with an explanation and download link
-    render text and HTML source using text nodes, binary bytes as hexadecimal
+    expanding text, HTML, binary, JSON, CSV, image or PDF also reads its content handle
+    page text and binary content in 64 KiB ranges through the entire resource
+    render text and HTML source using text nodes, binary and split UTF-8 bytes as hexadecimal
+    offer an explained filter selector on each readable child, defaulting to its ordinary kind
+    mount the selected filter on its byte handle regardless of extension or provider
+    retain JSON scalar bytes for subsequent filtering
+    keep duplicate ZIP names independently servable; report corrupt or unreadable entries
     render images and PDFs through local blob URLs
     preserve nested driver results and revoke preview URLs when collapsing
 ```

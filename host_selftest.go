@@ -655,6 +655,11 @@ func runHostSelfTest() error {
 	if err := checkGitHubBrowse(store, rootResources); err != nil {
 		return err
 	}
+	switch err := checkS3Composition(store, fakeAWSPath, archiveZip); {
+	case err != nil:
+		return fmt.Errorf("S3 composition self-test failed: %v", err)
+	default:
+	}
 	localMachineStore := NewStore()
 	defer localMachineStore.stopDrivers()
 	localMachineResources, err := localMachineStore.loadRootDriver()
