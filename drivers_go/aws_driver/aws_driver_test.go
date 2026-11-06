@@ -86,6 +86,7 @@ case "$*" in
   "ec2 authorize-security-group-ingress --group-id sg-123 --ip-permissions "*" --profile default --region us-east-1 --output json --no-cli-pager") printf '%s' '{"Return":true}' ;;
   "s3api list-buckets --profile default --region us-east-1 --output json --no-cli-pager") printf '%s' '{"Buckets":[{"Name":"example-bucket"}]}' ;;
   "s3api get-bucket-location --bucket example-bucket --profile default --region us-east-1 --output json --no-cli-pager") printf '%s' '{"LocationConstraint":"us-east-1"}' ;;
+  "s3api list-objects-v2 --bucket example-bucket --delimiter / --prefix= --max-items 1000 --profile default --region us-east-1 --output json --no-cli-pager") printf '%s' '{"Contents":[]}' ;;
   "s3api put-bucket-versioning --bucket example-bucket --versioning-configuration {\"Status\":\"Enabled\"} --profile default --region us-east-1 --output json --no-cli-pager") printf '%s' '{}' ;;
   "iam list-roles --profile default --region us-east-1 --output json --no-cli-pager") printf '%s' '{"Roles":[{"RoleName":"ExampleRole"}]}' ;;
   "iam get-role --role-name ExampleRole --profile default --region us-east-1 --output json --no-cli-pager") printf '%s' '{"Role":{"RoleName":"ExampleRole"}}' ;;

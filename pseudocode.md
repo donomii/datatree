@@ -441,6 +441,40 @@ POST /api/github/action:
 
 ## AWS browsing and actions
 
+Content browsing extension:
+
+```
+S3 bucket or prefix:
+    validate profile, region, bucket, opaque prefix and optional page token
+    list objects and common prefixes using delimiter slash
+    expose prefixes as nested views and objects as lazy views with actual sizes
+    distinguish reserved controls with unique internal keys
+    expose returned continuation as next-page child and preserve bucket actions
+
+S3 object:
+    allow only exact remote-object to stdout copy
+    read actual bytes under the AWS output bound
+    emit a content child classified by filename, JSON validity or UTF-8 validity
+    serve bytes through existing range protocol for nested drivers and download
+    report permission, size and validation failures as visible errors
+
+AWS data query:
+    retain complete JSON response
+    find compiled data edges matching the current operation
+    validate each resource array and identifier
+    expose named children for the resource's next read-only data queries
+    retain parent identifier when the next query requires it
+    allow only compiled argument templates; follow CLI automatic pagination
+    explicitly report database-connection and state-changing SQS limitations
+
+Browser preview:
+    expanding text, HTML, binary, image or PDF also reads its content handle
+    reject inline previews larger than 8 MiB with an explanation and download link
+    render text and HTML source using text nodes, binary bytes as hexadecimal
+    render images and PDFs through local blob URLs
+    preserve nested driver results and revoke preview URLs when collapsing
+```
+
 ```
 configuration:
     aws = DATATREE_AWS or aws on PATH

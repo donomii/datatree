@@ -1,5 +1,23 @@
 Datatree Specification
 
+Standalone repository: https://github.com/donomii/datatree.
+
+Content browsing update:
+
+The no-argument XSH launchers build.xsh, run.xsh, test.xsh, demo.xsh and install.xsh work from any directory. run.xsh builds and opens the location browser. test.xsh runs all Go tests and the executable's -test self-test. install.xsh installs to HOME/.local/bin/datatree. Existing shell scripts remain as legacy launchers.
+
+Opening an S3 bucket in the service catalog, Resource Explorer, or Cloud Control AWS::S3::Bucket view lists actual objects and slash-delimited prefixes, without requiring bucket-location metadata permission. Prefixes expand recursively. Objects show their sizes and an [object] suffix, and expand lazily to a child containing their actual bytes. That child mounts the existing JSON, text, CSV, image, HTML, PDF or ZIP driver and offers download. Unknown JSON and UTF-8 bytes are classified as JSON and text respectively. Empty files retain empty contents. Each listing uses the CLI paginator with at most 1000 objects and exposes a returned NextToken as [next page]. Numbered internal child keys avoid collisions with reserved names and duplicate labels. The first bucket page retains its actions branch. Permission errors, invalid object sizes and keys, repeated tokens and byte-limit failures appear as errors.
+
+S3 mount states add key and token strings. Keys are opaque UTF-8 up to 1024 bytes and never interpreted as local paths or shell commands. Tokens are bounded to 8192 bytes. Object views require a non-empty key and no token; unrelated views reject these fields. Only exact read-only list-objects-v2 and remote-object-to-stdout copy commands are allowed. Uploads, recursive copies, local destinations and arbitrary flags are rejected. All bytes remain bounded by DATATREE_AWS_MAX_OUTPUT_BYTES, default 8388608.
+
+AWS containers expose data queries beside the complete response JSON: DynamoDB tables to items; CloudWatch groups to streams to log events; Route 53 zones to DNS records; ECR repositories to images; backup vaults to recovery points; Lambda functions to configuration and code-download location; ECS clusters to tasks/services to details; EKS clusters to cluster data; Step Functions machines to definitions and executions to event histories; EventBridge rules to targets; Secrets Manager entries to values; KMS keys to details; SNS topics to attributes and subscriptions; SQS queues to attributes; API Gateway APIs to paths; certificates to details; load balancers to listeners; CloudFormation stacks to resources and templates. Compiled argument templates validate each identifier and retain a parent identifier when needed. CLI automatic pagination reads all results under the output byte bound; exceeding that bound produces an explicit error.
+
+IAM roles, users and groups expose inline policy names followed by their policy documents; customer-managed policies expose versions followed by their documents. Access Analyzer exposes findings, GuardDuty exposes finding identifiers followed by complete finding data, and AWS Config rules expose compliance results. CloudWatch event pages expose a forward-token continuation; the final stable token ends pagination.
+
+SQS message reception changes visibility, so queues explicitly explain why read-only browsing cannot receive messages. RDS and ElastiCache entries explain that records require a database connection and credentials, beyond the AWS management APIs. EKS configuration does not grant workload access; configured Kubernetes contexts remain available through the Kubernetes driver. Lambda code bytes are not fetched from its returned remote location. Image-layer, backup-file and database-protocol access are not implemented by these data queries.
+
+Expanding text, HTML, binary, image or PDF resources displays an inline content preview as well as extracted metadata and links. Text and HTML source use text nodes, so source scripts never execute. Binary files show hexadecimal bytes. Images and PDFs use local blob URLs, revoked when a branch collapses. Inline previews allow 8 MiB; larger files display an explanation and retain the full download link. These previews apply to local files, uploaded descendants and S3 content children. JSON, CSV and ZIP continue to show nested structured contents through their existing drivers.
+
 1. Summary
 
 Datatree is a read-only browser for nested data containers. A host process manages standalone driver programs. Each driver understands one kind of container and exposes that container's children as resources. The host can then mount another driver on any expandable resource, allowing directory-in-directory, ZIP-in-directory, ZIP-in-ZIP, text-in-ZIP, and similar nested browsing.

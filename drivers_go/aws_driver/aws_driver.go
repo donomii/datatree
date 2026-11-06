@@ -16,6 +16,8 @@ type mountState struct {
 	TypeName   string `json:"typeName,omitempty"`
 	Identifier string `json:"identifier,omitempty"`
 	Operation  string `json:"operation,omitempty"`
+	Key        string `json:"key,omitempty"`
+	Token      string `json:"token,omitempty"`
 }
 
 type actionTarget struct {
@@ -86,6 +88,12 @@ func buildAWSView(raw []byte) ([]driverlib.Resource, map[string][]byte, error) {
 	default:
 	}
 	switch state.View {
+	case viewS3Objects:
+		return listS3Objects(config, state)
+	case viewS3Object:
+		return readS3Object(config, state)
+	case viewData:
+		return listAWSData(config, state)
 	case viewRoot:
 		return listProfiles(config)
 	case viewProfile:
@@ -151,6 +159,18 @@ func parseMountState(raw []byte) (mountState, error) {
 }
 
 func validateMountState(state mountState) error {
+	switch state.View {
+	case viewS3Objects, viewS3Object:
+		return validateS3State(state)
+	case viewData:
+		return validateDataState(state)
+	default:
+		switch {
+		case state.Key != "" || state.Token != "":
+			return fmt.Errorf("invalid AWS %s state: unexpected key or pagination token", state.View)
+		default:
+		}
+	}
 	switch state.View {
 	case viewRoot:
 		switch {

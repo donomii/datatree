@@ -753,6 +753,42 @@
       }
     }
 
+    async function appendContentPreview(container, resource, handle) {
+      if (['text', 'file', 'html', 'image', 'pdf'].includes(resource.kind)) {
+        const response = await fetch(`/api/data?handle=${encodeURIComponent(handle)}&offset=0&length=8388609`);
+        if (!response.ok) {
+          throw new Error(`Cannot read content: ${await response.text()}`);
+        } else {
+          const bytes = await response.arrayBuffer();
+          if (bytes.byteLength > 8388608) {
+            throw new Error('Inline preview exceeds 8 MiB; use download to read the complete file.');
+          } else if (resource.kind === 'image' || resource.kind === 'pdf') {
+            const type = resource.kind === 'pdf' ? 'application/pdf' : '';
+            const url = URL.createObjectURL(new Blob([bytes], {type}));
+            const media = document.createElement(resource.kind === 'image' ? 'img' : 'iframe');
+            media.src = url;
+            media.title = `Contents of ${resource.name}`;
+            media.style.cssText = 'display:block;max-width:100%;width:100%;height:60vh;object-fit:contain';
+            container.appendChild(media);
+            container.previewURL = url;
+          } else {
+            const preview = document.createElement('pre');
+            preview.style.cssText = 'white-space:pre-wrap;overflow-wrap:anywhere;max-height:60vh;overflow:auto';
+            preview.title = 'File contents; HTML is displayed as source without running scripts';
+            try {
+              preview.textContent = new TextDecoder('utf-8', {fatal: true}).decode(bytes);
+            } catch (error) {
+              preview.textContent = 'Binary content (hexadecimal):\n' + Array.from(new Uint8Array(bytes), byte => byte.toString(16).padStart(2, '0')).join(' ');
+            }
+            container.appendChild(preview);
+          }
+        }
+        return true;
+      } else {
+        return false;
+      }
+    }
+
     async function expandResource(item, resource, handle, name, path, recursively = false) {
       const next = item.nextSibling;
       if (next && next.className === 'tree') {
@@ -760,6 +796,13 @@
           setExpansionState(item, true);
           await expandRenderedResources(next.renderedResources || []);
         } else {
+          for (const node of [next, ...next.querySelectorAll('.tree')]) {
+            if (node.previewURL) {
+              URL.revokeObjectURL(node.previewURL);
+            } else {
+              // This node has no allocated media preview.
+            }
+          }
           next.remove();
           setExpansionState(item, false);
         }
@@ -792,6 +835,7 @@
         
         const data = await response.json();
         header.textContent = `${name} (${data.driver})`;
+        const hasPreview = await appendContentPreview(subContainer, resource, handle);
         
         if (data.resources && data.resources.length > 0) {
           const contentDiv = document.createElement('div');
@@ -806,7 +850,7 @@
         } else {
           const empty = document.createElement('div');
           empty.className = 'meta';
-          empty.textContent = 'No child resources';
+          empty.textContent = hasPreview ? 'No extracted child resources' : 'No child resources';
           subContainer.appendChild(empty);
         }
       } catch (error) {

@@ -44,7 +44,7 @@ func listAWSServiceQuery(config awsConfig, state mountState) ([]driverlib.Resour
 	case "iam-policies":
 		return listIAMPolicies(out, state)
 	default:
-		return rawAWSResponse(out, state.Operation)
+		return listAWSDataResources(out, state)
 	}
 }
 
@@ -208,6 +208,12 @@ func listIAMPolicies(out []byte, state mountState) ([]driverlib.Resource, map[st
 }
 
 func listAWSServiceResource(config awsConfig, state mountState) ([]driverlib.Resource, map[string][]byte, error) {
+	switch state.Operation {
+	case "s3-buckets":
+		state.View = viewS3Objects
+		return listS3Objects(config, state)
+	default:
+	}
 	out, err := runReadOnlyAWS(config, serviceResourceArgs(state.Profile, state.Region, state.Operation, state.Identifier))
 	switch {
 	case err != nil:
@@ -224,6 +230,21 @@ func listAWSServiceResource(config awsConfig, state mountState) ([]driverlib.Res
 	}
 	resources := []driverlib.Resource{{Name: resourceActionsEntryName, Kind: "aws", Size: 0}, {Name: "[details]", Kind: "json", Size: int64(len(out))}}
 	children := map[string][]byte{resourceActionsEntryName: actionsState, "[details]": out}
+	dataResources, dataChildren, dataErr := listAWSDataResources(out, state)
+	switch {
+	case dataErr != nil:
+		return nil, nil, dataErr
+	default:
+		resources = append(resources, dataResources[1:]...)
+		for key, value := range dataChildren {
+			switch key {
+			case "[response]":
+				continue
+			default:
+				children[key] = value
+			}
+		}
+	}
 	return resources, children, nil
 }
 

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 
 	"datahumper/drivers_go/driverlib"
 )
@@ -48,8 +49,30 @@ func listResourceSearch(config awsConfig, state mountState) ([]driverlib.Resourc
 	resources := []driverlib.Resource{}
 	children := map[string][]byte{}
 	for _, resource := range named {
-		resources = append(resources, driverlib.Resource{Name: resource.name, Kind: "json", Size: int64(len(resource.raw))})
-		children[resource.name] = resource.raw
+		var summary struct {
+			Arn          string
+			ResourceType string
+		}
+		switch err := json.Unmarshal(resource.raw, &summary); {
+		case err != nil:
+			return nil, nil, fmt.Errorf("invalid Resource Explorer entry: %v", err)
+		default:
+		}
+		arn := strings.SplitN(summary.Arn, ":", 6)
+		switch {
+		case summary.ResourceType == "s3:bucket" && len(arn) == 6 && arn[2] == "s3" && validS3Bucket(arn[5]):
+			bucket, err := encodeMountState(mountState{View: viewS3Objects, Profile: state.Profile, Region: state.Region, Operation: "s3-buckets", Identifier: arn[5]})
+			switch {
+			case err != nil:
+				return nil, nil, err
+			default:
+				resources = append(resources, driverlib.Resource{Name: resource.name, Kind: "aws"})
+				children[resource.name] = bucket
+			}
+		default:
+			resources = append(resources, driverlib.Resource{Name: resource.name, Kind: "json", Size: int64(len(resource.raw))})
+			children[resource.name] = resource.raw
+		}
 	}
 	return resources, children, nil
 }
@@ -144,6 +167,12 @@ func listResources(config awsConfig, state mountState) ([]driverlib.Resource, ma
 }
 
 func listResource(config awsConfig, state mountState) ([]driverlib.Resource, map[string][]byte, error) {
+	switch state.TypeName {
+	case "AWS::S3::Bucket":
+		state.View, state.Operation, state.TypeName = viewS3Objects, "s3-buckets", ""
+		return listS3Objects(config, state)
+	default:
+	}
 	out, err := runReadOnlyAWS(config, resourceGetArgs(state.Profile, state.Region, state.TypeName, state.Identifier))
 	switch {
 	case err != nil:

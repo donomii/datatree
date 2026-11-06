@@ -119,6 +119,8 @@ func assertReadOnlyAWSInvocation(args []string) {
 	case validRemoteInvocation(args, "cloudcontrol", "list-resources"):
 	case validRemoteInvocation(args, "cloudcontrol", "get-resource"):
 	case validServiceReadInvocation(args):
+	case validDataReadInvocation(args):
+	case validS3ReadInvocation(args):
 	default:
 		panic(fmt.Sprintf("AWS CLI invocation blocked: expected an exact allowlisted read-only command, refusing to run %q", strings.Join(args, " ")))
 	}
