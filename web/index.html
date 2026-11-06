@@ -1,0 +1,819 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>Directory Browser</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 2rem; }
+    .tree { margin-left: 1.5rem; border-left: 2px solid #ddd; padding-left: .75rem; }
+    code { background: #f5f5f5; padding: .1rem .3rem; border-radius: 4px;}
+    .file-item { margin: 0.25rem 0; display: flex; align-items: center; gap: 0.5rem; }
+    .file-item > span:last-child { min-width: 0; overflow-wrap: anywhere; }
+    .kind-diff-add code, .kind-diff-delete code, .kind-diff-context code, .kind-diff-hunk code, .kind-diff-meta code { white-space: pre-wrap; }
+    .kind-diff-add code { background: #dcfce7; color: #14532d; }
+    .kind-diff-delete code { background: #fee2e2; color: #7f1d1d; }
+    .kind-diff-hunk code { background: #dbeafe; color: #1e3a8a; }
+    .kind-diff-meta code { background: #e5e7eb; color: #374151; }
+    .bookmark { width: 1.4rem; display: inline-flex; justify-content: center; }
+    .action-control { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; min-width: 0; }
+    .action-control textarea { width: min(40rem, 100%); min-height: 4rem; box-sizing: border-box; font: inherit; }
+    .action-control input { min-width: min(20rem, 100%); box-sizing: border-box; font: inherit; }
+    .action-control select { padding: 0.2rem; }
+    .action-status { flex-basis: 100%; }
+    .directory { cursor: pointer; color: #0066cc; }
+    .directory:hover { text-decoration: underline; }
+    .meta { color: #555; font-size: 0.85rem; }
+    .expander, .recursive-expander { width: 1.4rem; display: inline-flex; justify-content: center; }
+    .error { color: #9b1c1c; font-size: 0.9rem; }
+    button { padding: 0.25rem 0.5rem; font-size: 0.8rem; }
+    a.download { font-size: 0.8rem; }
+    .upload { margin: 0 0 1.5rem 0; display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+    .upload select { padding: 0.2rem; font-size: 0.8rem; }
+    @media (max-width: 600px) {
+      body { margin: 1rem 0.75rem; }
+      .tree { margin-left: 0.35rem; padding-left: 0.35rem; }
+      .file-item { align-items: flex-start; gap: 0.25rem; flex-wrap: wrap; }
+      .file-item > .action-control { flex: 1 1 12rem; }
+      button { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+    }
+  </style>
+</head>
+<body>
+  <h1>Directory Browser</h1>
+
+  <!-- Upload a blob and mount a driver on it via /api/upload + /api/load -->
+  <div class="upload">
+    <label for="upload-file">Choose a file to inspect:</label>
+    <input type="file" id="upload-file" title="The selected file is read into Datatree without changing the original">
+    <label for="upload-driver">Preview using:</label>
+    <select id="upload-driver" title="Choose the driver that understands the selected file type"></select>
+    <button type="button" id="upload-button">Upload and preview</button>
+    <span class="meta" id="upload-status"></span>
+    <span class="meta" id="upload-limits">Loading upload limits...</span>
+  </div>
+  <div id="upload-tree"></div>
+
+  <!-- Auto-load selected directory -->
+  <div id="loader">Loading...</div>
+  <div id="bookmark-status" class="meta" title="Reports whether a copied tree link is ready or whether a bookmarked path could be restored"></div>
+  <button type="button" id="save-tree" disabled>Save visible tree as JSON</button>
+  <span id="save-tree-status" class="meta" role="status"></span>
+
+  <!-- Directory tree -->
+  <div id="tree"></div>
+
+  <script>
+    // Simple event handler using document ready and fetch
+    document.addEventListener('DOMContentLoaded', function() {
+      if (window.location.protocol === 'file:') {
+        const loader = document.getElementById('loader');
+        loader.className = 'error';
+        loader.textContent = 'Datatree cannot run directly from this HTML file. Start Datatree with ./run.sh, then open the http://127.0.0.1:PORT address it prints.';
+        document.getElementById('upload-file').disabled = true;
+        document.getElementById('upload-driver').disabled = true;
+        document.getElementById('upload-button').disabled = true;
+        document.getElementById('upload-limits').textContent = '';
+      } else {
+        setTimeout(loadHomeDirectory, 1000); // Give more time for root driver to load
+        loadDriverChoices();
+        loadUploadSettings();
+        document.getElementById('upload-button').onclick = uploadAndLoad;
+      }
+    });
+
+    // Fill the upload driver selector with drivers that accept uploaded files.
+    // zip_driver is preselected because archives are the most common upload.
+    async function loadDriverChoices() {
+      const select = document.getElementById('upload-driver');
+      try {
+        const response = await fetch('/api/drivers');
+        if (!response.ok) {
+          throw new Error(`GET /api/drivers returned ${response.status}`);
+        }
+        const drivers = await response.json();
+        select.innerHTML = '';
+        drivers.forEach(driver => {
+          const option = document.createElement('option');
+          option.value = driver;
+          option.textContent = driver;
+          if (driver === 'zip_driver') {
+            option.selected = true;
+          } else {
+            // Other drivers stay selectable but not preselected
+          }
+          select.appendChild(option);
+        });
+      } catch (error) {
+        document.getElementById('upload-status').textContent = `Could not list drivers: ${error.message}`;
+      }
+    }
+
+    async function loadUploadSettings() {
+      const limits = document.getElementById('upload-limits');
+      try {
+        const response = await fetch('/api/upload-settings');
+        if (!response.ok) {
+          throw new Error(`GET /api/upload-settings returned ${response.status}`);
+        }
+        const settings = await response.json();
+        const fileLimitMiB = Math.floor(settings.max_upload_bytes / 1048576);
+        const retainedLimitMiB = Math.floor(settings.max_retained_upload_bytes / 1048576);
+        limits.textContent = `Limit: ${fileLimitMiB} MiB per file, ${retainedLimitMiB} MiB retained; inactive uploads expire after ${settings.upload_idle_timeout}`;
+        limits.title = settings.explanation;
+      } catch (error) {
+        limits.textContent = `Could not read upload limits: ${error.message}`;
+      }
+    }
+
+    // Upload the chosen file as a raw blob, then mount the chosen driver on
+    // it and render the resulting resources as a tree.
+    async function uploadAndLoad() {
+      const fileInput = document.getElementById('upload-file');
+      const driver = document.getElementById('upload-driver').value;
+      const status = document.getElementById('upload-status');
+      const uploadTree = document.getElementById('upload-tree');
+      status.className = 'meta';
+      if (!fileInput.files || fileInput.files.length === 0) {
+        status.className = 'error';
+        status.textContent = 'Choose a file to upload first';
+        return;
+      }
+      if (!driver) {
+        status.className = 'error';
+        status.textContent = 'Choose a driver to load on the upload first';
+        return;
+      }
+      const file = fileInput.files[0];
+      status.textContent = `Uploading ${file.name}...`;
+      try {
+        const uploadResponse = await fetch('/api/upload', { method: 'POST', body: file });
+        if (!uploadResponse.ok) {
+          const message = await uploadResponse.text();
+          throw new Error(`upload failed: ${message}`);
+        }
+        const upload = await uploadResponse.json();
+        status.textContent = `Loading ${driver} on ${file.name} (${upload.res_id}, ${upload.size} bytes)...`;
+        const loadResponse = await fetch('/api/load', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({res_id: upload.res_id, driver: driver})
+        });
+        if (!loadResponse.ok) {
+          const message = await loadResponse.text();
+          throw new Error(`load failed: ${message}`);
+        }
+        const data = await loadResponse.json();
+        status.textContent = `${file.name} (${data.driver}, session ${data.session})`;
+        const subContainer = document.createElement('div');
+        subContainer.className = 'tree';
+        const unloadButton = document.createElement('button');
+        unloadButton.type = 'button';
+        unloadButton.textContent = `Close ${file.name}`;
+        unloadButton.title = 'Stop this preview and immediately release its uploaded bytes and child handles';
+        unloadButton.onclick = async function() {
+          const response = await fetch('/api/unload', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({session: data.session})
+          });
+          if (response.ok) {
+            subContainer.remove();
+            status.textContent = `Closed ${file.name} and released its retained upload`;
+          } else {
+            const message = await response.text();
+            status.className = 'error';
+            status.textContent = `Could not close ${file.name}: ${message}`;
+          }
+        };
+        subContainer.appendChild(unloadButton);
+        const treeContents = document.createElement('div');
+        subContainer.appendChild(treeContents);
+        if (data.resources && data.resources.length > 0) {
+            renderDirectory(treeContents, data.resources, null);
+        } else {
+          const empty = document.createElement('div');
+          empty.className = 'meta';
+          empty.textContent = 'No child resources';
+          treeContents.appendChild(empty);
+        }
+        uploadTree.insertBefore(subContainer, uploadTree.firstChild);
+      } catch (error) {
+        status.className = 'error';
+        status.textContent = `Could not load ${file.name}: ${error.message}`;
+      }
+    }
+
+    async function loadHomeDirectory() {
+      // Try multiple times with increasing delays to wait for root driver
+      for (let attempt = 1; attempt <= 5; attempt++) {
+        try {
+          const response = await fetch('/api/list');
+          if (response.ok) {
+            const data = await response.json();
+            document.getElementById('loader').textContent = '';
+            const rendered = renderDirectory(document.getElementById('tree'), data.resources, []);
+            const saveTree = document.getElementById('save-tree');
+            saveTree.onclick = () => saveVisibleTree(rendered);
+            saveTree.disabled = false;
+            await restoreBookmarkedPath(rendered);
+            return; // Success!
+          }
+        } catch (error) {
+          console.log(`Attempt ${attempt} failed:`, error.message);
+        }
+        
+        // Wait before next attempt
+        await new Promise(resolve => setTimeout(resolve, attempt * 500));
+      }
+      
+      // All attempts failed
+      document.getElementById('loader').textContent = 'Error loading directory - root driver may not be ready';
+    }
+
+    function renderDirectory(container, resources, parentPath = null) {
+      container.innerHTML = '';
+      const rendered = [];
+      
+      resources.forEach(r => {
+        const name = resourceName(r);
+        const handle = resourceHandle(r);
+        const item = document.createElement('div');
+        item.className = 'file-item';
+        item.classList.add(`kind-${r.kind}`);
+        const itemPath = parentPath === null ? null : parentPath.concat([{name: name, kind: r.kind}]);
+        
+        const icons = { directory: '📁', git: '🔀', github: '◉', aws: '☁', hardware: '🖥️', usb: '🔌', diff: 'Δ', 'diff-add': '+', 'diff-delete': '-', 'diff-context': ' ', 'diff-hunk': '@@', 'diff-meta': 'i', kubernetes: '☸️', json: '🗂️', kv: '▪️', error: '⚠️', 'k8s-pod': '📦', 'k8s-workload': '⚙️', 'k8s-service': '🔌', 'k8s-configmap': '🗒️', 'k8s-node': '🖥️' };
+        const icon = isAction(r.kind) ? '▶' : (icons[r.kind] || '📄');
+        const iconSpan = document.createElement('span');
+        iconSpan.textContent = icon;
+        const nameSpan = document.createElement('span');
+        const code = document.createElement('code');
+        code.textContent = name;
+        const meta = document.createElement('span');
+        meta.className = 'meta';
+        const sizeText = r.size >= 0 ? `${r.size} bytes` : 'size read on demand';
+        meta.textContent = ` (${r.kind}, ${sizeText})`;
+        
+        nameSpan.appendChild(code);
+        nameSpan.appendChild(meta);
+
+        // The expand arrow sits leftmost, directly beside the row it opens.
+        // Non-expandable rows keep an empty expander so names line up.
+        const expander = document.createElement('span');
+        expander.className = 'expander';
+        const recursiveExpander = document.createElement('span');
+        recursiveExpander.className = 'recursive-expander';
+        const bookmark = document.createElement('span');
+        bookmark.className = 'bookmark';
+        if (handle && isExpandable(r.kind)) {
+          const expand = document.createElement('button');
+          expand.type = 'button';
+          expand.title = 'Expand';
+          expand.textContent = '▸';
+          expand.onclick = async event => {
+            event.stopPropagation();
+            await expandResource(item, r, handle, name, itemPath);
+          };
+          expander.appendChild(expand);
+          const expandRecursively = document.createElement('button');
+          expandRecursively.type = 'button';
+          expandRecursively.title = 'Expand this node and every expandable descendant';
+          expandRecursively.textContent = '⇲';
+          expandRecursively.onclick = async event => {
+            event.stopPropagation();
+            expandRecursively.disabled = true;
+            try {
+              await expandResource(item, r, handle, name, itemPath, true);
+            } finally {
+              expandRecursively.disabled = false;
+            }
+          };
+          recursiveExpander.appendChild(expandRecursively);
+          if (itemPath !== null) {
+            const copyLink = document.createElement('button');
+            copyLink.type = 'button';
+            copyLink.title = 'Copy a link that restores this expanded tree path';
+            copyLink.textContent = '🔗';
+            copyLink.onclick = async event => {
+              event.stopPropagation();
+              await copyBookmark(itemPath, name);
+            };
+            bookmark.appendChild(copyLink);
+          } else {
+            // Uploaded trees do not survive a page reload and cannot be bookmarked
+          }
+        } else {
+          expander.textContent = '';
+          recursiveExpander.textContent = '';
+          bookmark.textContent = '';
+        }
+
+        item.appendChild(expander);
+        item.appendChild(recursiveExpander);
+        item.appendChild(bookmark);
+        item.appendChild(iconSpan);
+        if (isGitHubAction(r.kind)) {
+          item.appendChild(createGitHubActionControl(r, handle, name));
+        } else if (isAWSAction(r.kind)) {
+          item.appendChild(createAWSActionControl(r, handle, name));
+        } else {
+          item.appendChild(nameSpan);
+        }
+
+        if (handle && !isAction(r.kind) && r.kind !== 'url' && r.kind !== 'directory' && r.kind !== 'git' && r.kind !== 'github' && r.kind !== 'aws' && r.kind !== 'hardware' && r.kind !== 'usb' && r.kind !== 'diff' && !r.kind.startsWith('diff-') && r.kind !== 'kubernetes' && r.kind !== 'error' && r.kind !== 'kv') {
+          const download = document.createElement('a');
+          download.className = 'download';
+          download.href = `/api/data?handle=${encodeURIComponent(handle)}&offset=0&length=-1`;
+          download.download = name;
+          download.textContent = 'download';
+          item.appendChild(download);
+        } else {
+          // Kinds without raw bytes offer no download link
+        }
+
+        container.appendChild(item);
+        rendered.push({item: item, resource: r, handle: handle, name: name, path: itemPath});
+      });
+      return rendered;
+    }
+
+    function saveVisibleTree(rendered) {
+      const status = document.getElementById('save-tree-status');
+      let count = 0;
+      function capture(rows, depth) {
+        if (depth > 12) throw new Error('Collapse a branch before exporting a tree deeper than 12 levels.');
+        return rows.filter(row => !isAction(row.resource.kind)).map(row => {
+          if (++count > 5000) throw new Error('Collapse branches until the visible tree has at most 5,000 resources.');
+          const node = {name: row.name, kind: row.resource.kind, size: row.resource.size};
+          const children = row.item.nextElementSibling?.renderedResources;
+          if (children?.length) node.children = capture(children, depth + 1);
+          return node;
+        });
+      }
+      try {
+        const snapshot = JSON.stringify({datatree_snapshot: 1, resources: capture(rendered, 1)});
+        const file = new Blob([snapshot], {type: 'application/json'});
+        if (file.size > 4 * 1024 * 1024) throw new Error('The visible snapshot exceeds 4 MiB. Collapse a branch and try again.');
+        const url = URL.createObjectURL(file);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = 'datatree-snapshot.json';
+        link.click();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        status.textContent = `Snapshot prepared with ${count} resources.`;
+      } catch (error) {
+        status.textContent = `Could not save tree: ${error.message}`;
+      }
+    }
+
+    function isGitHubAction(kind) {
+      return kind.startsWith('github-action-');
+    }
+
+    function isAWSAction(kind) {
+      return kind.startsWith('aws-action-');
+    }
+
+    function isAction(kind) {
+      return isGitHubAction(kind) || isAWSAction(kind);
+    }
+
+    function createAWSActionControl(resource, handle, name) {
+      const control = document.createElement('div');
+      control.className = 'action-control';
+      const status = document.createElement('span');
+      status.className = 'meta action-status';
+      status.title = 'Reports whether AWS accepted the requested action or explains why it failed';
+      let bodyInput = null;
+      if (resource.kind === 'aws-action-create' || resource.kind === 'aws-action-update' || resource.kind === 'aws-action-sg-authorize-ingress' || resource.kind === 'aws-action-sg-revoke-ingress' || resource.kind === 'aws-action-s3-put-policy' || resource.kind === 'aws-action-iam-update-trust' || resource.kind === 'aws-action-iam-policy-version') {
+        const label = document.createElement('label');
+        const isSecurityGroup = resource.kind === 'aws-action-sg-authorize-ingress' || resource.kind === 'aws-action-sg-revoke-ingress';
+        label.textContent = resource.kind === 'aws-action-create' ? 'Desired state JSON: ' : resource.kind === 'aws-action-update' ? 'RFC 6902 JSON patch: ' : isSecurityGroup ? 'IP permissions JSON: ' : 'Policy JSON: ';
+        label.title = resource.kind === 'aws-action-create' ? 'Enter the complete desired resource properties as a JSON object' : resource.kind === 'aws-action-update' ? 'Enter a non-empty RFC 6902 JSON patch array describing the property changes' : isSecurityGroup ? 'Enter a JSON array of AWS EC2 IP permission objects, including protocol, ports and IPv4 or IPv6 ranges' : 'Enter the complete AWS policy document as a JSON object';
+        bodyInput = document.createElement('textarea');
+        bodyInput.maxLength = 262144;
+        bodyInput.placeholder = resource.kind === 'aws-action-create' ? '{"Name":"example"}' : resource.kind === 'aws-action-update' ? '[{"op":"replace","path":"/Property","value":"new value"}]' : isSecurityGroup ? '[{"IpProtocol":"tcp","FromPort":443,"ToPort":443,"IpRanges":[{"CidrIp":"203.0.113.0/24"}]}]' : '{"Version":"2012-10-17","Statement":[]}';
+        label.appendChild(bodyInput);
+        control.appendChild(label);
+      } else if (resource.kind === 'aws-action-set-region') {
+        const label = document.createElement('label');
+        label.textContent = 'Default region: ';
+        label.title = 'Set the AWS CLI default region for this local profile';
+        bodyInput = document.createElement('input');
+        bodyInput.type = 'text';
+        bodyInput.maxLength = 32;
+        bodyInput.placeholder = 'us-east-1';
+        label.appendChild(bodyInput);
+        control.appendChild(label);
+      } else if (resource.kind === 'aws-action-set-output') {
+        const label = document.createElement('label');
+        label.textContent = 'Output format: ';
+        label.title = 'Set the AWS CLI output format for this local profile';
+        bodyInput = document.createElement('select');
+        for (const value of ['json', 'text', 'table', 'yaml', 'yaml-stream', 'off']) {
+          const option = document.createElement('option');
+          option.value = value;
+          option.textContent = value;
+          bodyInput.appendChild(option);
+        }
+        label.appendChild(bodyInput);
+        control.appendChild(label);
+      } else if (resource.kind === 'aws-action-s3-versioning') {
+        const label = document.createElement('label');
+        label.textContent = 'Versioning state: ';
+        label.title = 'Enable S3 object versioning or suspend creation of new object versions; suspension does not delete existing versions';
+        bodyInput = document.createElement('select');
+        for (const value of ['Enabled', 'Suspended']) {
+          const option = document.createElement('option');
+          option.value = value;
+          option.textContent = value;
+          bodyInput.appendChild(option);
+        }
+        label.appendChild(bodyInput);
+        control.appendChild(label);
+      } else {
+        // Commands represented by buttons alone have no body
+      }
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = name;
+      button.title = awsActionExplanation(resource.kind);
+      button.onclick = async event => {
+        event.stopPropagation();
+        const body = bodyInput === null ? '' : bodyInput.value;
+        if (bodyInput !== null && body.trim() === '') {
+          status.className = 'error action-status';
+          status.textContent = `${name} requires a value.`;
+        } else {
+          const confirmed = window.confirm(`${name}? This changes AWS configuration or resources.`);
+          if (confirmed) {
+            await executeAWSAction(button, status, handle, name, body);
+          } else {
+            status.className = 'meta action-status';
+            status.textContent = `${name} cancelled.`;
+          }
+        }
+      };
+      control.appendChild(button);
+      control.appendChild(status);
+      return control;
+    }
+
+    function awsActionExplanation(kind) {
+      const explanations = {
+        'aws-action-create': 'Create one Cloud Control resource from the entered desired-state JSON; AWS returns an asynchronous request token',
+        'aws-action-update': 'Update this Cloud Control resource using the entered RFC 6902 JSON patch; resources managed by another system should be changed there instead',
+        'aws-action-delete': 'Delete this Cloud Control resource; this can permanently remove data or infrastructure',
+        'aws-action-set-region': 'Change the default region stored in the local AWS CLI profile',
+        'aws-action-set-output': 'Change the output format stored in the local AWS CLI profile',
+        'aws-action-ec2-start': 'Start this stopped EC2 instance',
+        'aws-action-ec2-stop': 'Stop this EC2 instance; instance-store data may be lost',
+        'aws-action-ec2-reboot': 'Request an operating-system reboot of this EC2 instance',
+        'aws-action-ec2-terminate': 'Permanently terminate this EC2 instance and apply its configured volume deletion behavior',
+        'aws-action-sg-authorize-ingress': 'Add the entered inbound IP permissions to this EC2 security group',
+        'aws-action-sg-revoke-ingress': 'Remove the entered inbound IP permissions from this EC2 security group',
+        'aws-action-s3-put-policy': 'Replace this S3 bucket policy with the entered JSON policy document',
+        'aws-action-s3-delete-policy': 'Delete this S3 bucket policy',
+        'aws-action-s3-versioning': 'Enable or suspend versioning for new writes to this S3 bucket',
+        'aws-action-iam-update-trust': 'Replace the trust policy that controls which principals may assume this IAM role',
+        'aws-action-iam-policy-version': 'Create a new version of this customer-managed IAM policy and make it the default version'
+      };
+      return explanations[kind] || 'Execute this AWS action';
+    }
+
+    async function executeAWSAction(button, status, handle, name, body) {
+      button.disabled = true;
+      status.className = 'meta action-status';
+      status.textContent = `${name} in progress...`;
+      try {
+        const response = await fetch('/api/aws/action', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({handle: handle, body: body})
+        });
+        if (response.ok) {
+          const result = await response.json();
+          status.className = 'meta action-status';
+          status.textContent = result.message;
+        } else {
+          const message = await response.text();
+          status.className = 'error action-status';
+          status.textContent = `${name} failed: ${message}`;
+        }
+      } catch (error) {
+        status.className = 'error action-status';
+        status.textContent = `${name} failed: ${error.message}`;
+      } finally {
+        button.disabled = false;
+      }
+    }
+
+    function createGitHubActionControl(resource, handle, name) {
+      const control = document.createElement('div');
+      control.className = 'action-control';
+      const status = document.createElement('span');
+      status.className = 'meta action-status';
+      status.title = 'Reports whether GitHub accepted the requested action or explains why it failed';
+      let bodyInput = null;
+      let mergeMethod = null;
+      if (['github-action-comment', 'github-action-review-comment', 'github-action-request-changes'].includes(resource.kind)) {
+        const label = document.createElement('label');
+        label.textContent = `${name}: `;
+        label.title = actionExplanation(resource.kind);
+        bodyInput = document.createElement('textarea');
+        bodyInput.maxLength = 65536;
+        bodyInput.placeholder = resource.kind === 'github-action-comment' ? 'Comment text' : 'Review text';
+        bodyInput.title = actionExplanation(resource.kind);
+        label.appendChild(bodyInput);
+        control.appendChild(label);
+      } else {
+        // Actions without text do not need a body field
+      }
+      if (resource.kind === 'github-action-merge') {
+        const label = document.createElement('label');
+        label.textContent = 'Merge method: ';
+        label.title = 'Choose how GitHub combines the pull request commits; squash is the default';
+        mergeMethod = document.createElement('select');
+        mergeMethod.title = 'Choose merge, squash, or rebase before merging the pull request';
+        for (const optionValue of ['squash', 'merge', 'rebase']) {
+          const option = document.createElement('option');
+          option.value = optionValue;
+          option.textContent = optionValue;
+          mergeMethod.appendChild(option);
+        }
+        label.appendChild(mergeMethod);
+        control.appendChild(label);
+      } else {
+        // Non-merge actions have no merge-method choice
+      }
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = name;
+      button.title = actionExplanation(resource.kind);
+      button.onclick = async event => {
+        event.stopPropagation();
+        const body = bodyInput === null ? '' : bodyInput.value;
+        const method = mergeMethod === null ? '' : mergeMethod.value;
+        if (bodyInput !== null && body.trim() === '') {
+          status.className = 'error action-status';
+          status.textContent = `${name} requires non-empty text.`;
+        } else {
+          const confirmed = actionNeedsConfirmation(resource.kind) ? window.confirm(`${name}? This changes GitHub.`) : true;
+          if (confirmed) {
+            await executeGitHubAction(button, status, handle, name, body, method);
+          } else {
+            status.className = 'meta action-status';
+            status.textContent = `${name} cancelled.`;
+          }
+        }
+      };
+      control.appendChild(button);
+      control.appendChild(status);
+      return control;
+    }
+
+    function actionExplanation(kind) {
+      const explanations = {
+        'github-action-close': 'Close this pull request without deleting its branch',
+        'github-action-reopen': 'Reopen this closed pull request',
+        'github-action-merge': 'Merge this pull request using the selected method; GitHub branch protections still apply',
+        'github-action-comment': 'Post the entered text as a pull request comment',
+        'github-action-approve': 'Submit an approving pull request review',
+        'github-action-review-comment': 'Submit the entered text as a review without approval or a change request',
+        'github-action-request-changes': 'Submit the entered text as a review that requests changes',
+        'github-action-run-rerun': 'Restart every job in this completed workflow run',
+        'github-action-run-rerun-failed': 'Restart only failed jobs and their dependencies in this completed workflow run',
+        'github-action-run-cancel': 'Cancel this queued or running workflow run'
+      };
+      return explanations[kind] || 'Execute this GitHub action';
+    }
+
+    function actionNeedsConfirmation(kind) {
+      return !['github-action-comment', 'github-action-review-comment'].includes(kind);
+    }
+
+    async function executeGitHubAction(button, status, handle, name, body, mergeMethod) {
+      button.disabled = true;
+      status.className = 'meta action-status';
+      status.textContent = `${name} in progress...`;
+      try {
+        const response = await fetch('/api/github/action', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({handle: handle, body: body, merge_method: mergeMethod})
+        });
+        if (response.ok) {
+          const result = await response.json();
+          status.className = 'meta action-status';
+          status.textContent = result.message;
+        } else {
+          const message = await response.text();
+          status.className = 'error action-status';
+          status.textContent = `${name} failed: ${message}`;
+        }
+      } catch (error) {
+        status.className = 'error action-status';
+        status.textContent = `${name} failed: ${error.message}`;
+      } finally {
+        button.disabled = false;
+      }
+    }
+
+    function encodeBookmarkPath(path) {
+      const bytes = new TextEncoder().encode(JSON.stringify(path));
+      let binary = '';
+      bytes.forEach(value => {
+        binary += String.fromCharCode(value);
+      });
+      return btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
+    }
+
+    function decodeBookmarkPath(encoded) {
+      const padding = '='.repeat((4 - encoded.length % 4) % 4);
+      const binary = atob(encoded.replaceAll('-', '+').replaceAll('_', '/') + padding);
+      const bytes = Uint8Array.from(binary, character => character.charCodeAt(0));
+      const path = JSON.parse(new TextDecoder().decode(bytes));
+      if (Array.isArray(path) && path.length > 0 && path.length <= 64 && path.every(segment => segment && typeof segment.name === 'string' && typeof segment.kind === 'string')) {
+        return path;
+      } else {
+        throw new Error('expected one to 64 resource path segments containing name and kind');
+      }
+    }
+
+    function bookmarkedPath() {
+      const parameters = new URLSearchParams(window.location.hash.slice(1));
+      const encoded = parameters.get('view');
+      if (encoded === null || encoded === '') {
+        return [];
+      } else {
+        return decodeBookmarkPath(encoded);
+      }
+    }
+
+    async function copyBookmark(path, name) {
+      const url = new URL(window.location.href);
+      url.hash = `view=${encodeURIComponent(encodeBookmarkPath(path))}`;
+      window.history.replaceState({}, '', url);
+      const status = document.getElementById('bookmark-status');
+      try {
+        if (navigator.clipboard && window.isSecureContext) {
+          await navigator.clipboard.writeText(url.toString());
+          status.textContent = `Copied link for ${name}.`;
+        } else {
+          status.textContent = `Bookmark link ready in the address bar for ${name}.`;
+        }
+      } catch (error) {
+        status.className = 'error';
+        status.textContent = `Bookmark link is in the address bar but could not be copied: ${error.message}`;
+      }
+    }
+
+    async function restoreBookmarkedPath(rendered) {
+      const status = document.getElementById('bookmark-status');
+      let path;
+      try {
+        path = bookmarkedPath();
+      } catch (error) {
+        status.className = 'error';
+        status.textContent = `Could not restore bookmarked view: ${error.message}`;
+        return;
+      }
+      if (path.length === 0) {
+        status.textContent = '';
+      } else {
+        let current = rendered;
+        for (let index = 0; index < path.length; index++) {
+          const segment = path[index];
+          const target = current.find(candidate => candidate.name === segment.name && candidate.resource.kind === segment.kind);
+          if (!target || !target.handle || !isExpandable(target.resource.kind)) {
+            status.className = 'error';
+            status.textContent = `Could not restore bookmarked view at ${segment.name} (${segment.kind}).`;
+            return;
+          } else {
+            await expandResource(target.item, target.resource, target.handle, target.name, target.path);
+            const childTree = target.item.nextSibling;
+            if (index < path.length - 1 && childTree && childTree.className === 'tree') {
+              current = childTree.renderedResources || [];
+            } else if (index < path.length - 1) {
+              status.className = 'error';
+              status.textContent = `Could not restore bookmarked descendants below ${segment.name}.`;
+              return;
+            } else {
+              status.className = 'meta';
+              status.textContent = `Restored bookmarked view for ${segment.name}.`;
+            }
+          }
+        }
+      }
+    }
+
+    function resourceName(resource) {
+      if (resource.handle) {
+        return resource.name;
+      }
+      const marker = resource.name.lastIndexOf('|');
+      if (marker >= 0) {
+        return resource.name.slice(0, marker);
+      }
+      return resource.name;
+    }
+
+    function resourceHandle(resource) {
+      if (resource.handle) {
+        return resource.handle;
+      }
+      const marker = resource.name.lastIndexOf('|');
+      if (marker >= 0) {
+        return resource.name.slice(marker + 1);
+      }
+      return '';
+    }
+
+    function isExpandable(kind) {
+      return ['directory', 'git', 'github', 'aws', 'hardware', 'usb', 'diff', 'kubernetes', 'k8s-pod', 'k8s-workload', 'k8s-service', 'k8s-configmap', 'k8s-node', 'text', 'archive', 'zip', 'image', 'pdf', 'html', 'json', 'csv', 'file'].includes(kind);
+    }
+
+    async function expandRenderedResources(rendered) {
+      for (const child of rendered) {
+        if (child.handle && isExpandable(child.resource.kind)) {
+          await expandResource(child.item, child.resource, child.handle, child.name, child.path, true);
+        } else {
+          // Leaves have no descendants to expand
+        }
+      }
+    }
+
+    function setExpansionState(item, isOpen) {
+      const expand = item.querySelector('.expander button');
+      if (expand) {
+        expand.textContent = isOpen ? '▾' : '▸';
+        expand.title = isOpen ? 'Collapse' : 'Expand';
+      } else {
+        // Non-expandable rows have no expansion state
+      }
+    }
+
+    async function expandResource(item, resource, handle, name, path, recursively = false) {
+      const next = item.nextSibling;
+      if (next && next.className === 'tree') {
+        if (recursively) {
+          setExpansionState(item, true);
+          await expandRenderedResources(next.renderedResources || []);
+        } else {
+          next.remove();
+          setExpansionState(item, false);
+        }
+        return;
+      }
+
+      const subContainer = document.createElement('div');
+      subContainer.className = 'tree';
+      subContainer.style.marginTop = '0.5rem';
+      
+      const header = document.createElement('div');
+      header.textContent = `${name} loading...`;
+      subContainer.appendChild(header);
+      item.parentNode.insertBefore(subContainer, item.nextSibling);
+      setExpansionState(item, true);
+
+      try {
+        const response = await fetch('/api/autoLoad', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({handle: handle, kind: resource.kind})
+        });
+        
+        if (!response.ok) {
+          const message = await response.text();
+          header.className = 'error';
+          header.textContent = `Could not expand ${name}: ${message}`;
+          return;
+        }
+        
+        const data = await response.json();
+        header.textContent = `${name} (${data.driver})`;
+        
+        if (data.resources && data.resources.length > 0) {
+          const contentDiv = document.createElement('div');
+          const rendered = renderDirectory(contentDiv, data.resources, path);
+          subContainer.renderedResources = rendered;
+          subContainer.appendChild(contentDiv);
+          if (recursively) {
+            await expandRenderedResources(rendered);
+          } else {
+            // Normal expansion stops after this node
+          }
+        } else {
+          const empty = document.createElement('div');
+          empty.className = 'meta';
+          empty.textContent = 'No child resources';
+          subContainer.appendChild(empty);
+        }
+      } catch (error) {
+        header.className = 'error';
+        header.textContent = `Could not expand ${name}: ${error.message}`;
+      }
+    }
+  </script>
+</body>
+</html>

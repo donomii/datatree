@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Datatree · Portfolio Courtyard</title>
+  <link rel="stylesheet" href="./courtyard.css">
+</head>
+<body>
+  <main>
+    <div id="viewport" aria-label="Three-dimensional Datatree resource browser"></div>
+    <header>
+      <a href="/">← Datatree desktop browser</a>
+      <h1>Datatree</h1>
+      <p>Browse the directory opened by Datatree, explore a sample, or open a ZIP or snapshot in browser memory.</p>
+      <p id="tree-path" role="status"></p>
+      <button id="vr" hidden>Enter VR</button>
+      <p id="gallery-navigation" hidden>Focus the scene and use WASD to move, arrows to look, and Enter to select. On a gamepad, use the sticks to move and look and the bottom face button to select.</p>
+      <p id="vr-controls" hidden>In VR, use the left stick to move and the right stick to turn. Aim at a plaque and press the trigger or pinch with a tracked hand.</p>
+    </header>
+    <section aria-label="Datatree browser">
+      <p>Choose a branch to open it or a leaf to read its value.</p>
+      <button id="tree-live">Browse live Datatree</button>
+      <label>Open local ZIP or Datatree snapshot <input id="tree-file" type="file" accept=".zip,.json,application/zip,application/json"></label>
+      <button id="tree-sample">Restore sample</button>
+      <nav id="tree-controls" aria-label="Current branches and leaves"></nav>
+      <p id="tree-value" role="status"></p>
+    </section>
+  </main>
+  <script type="module" src="./datatree.js"></script>
+</body>
+</html>
