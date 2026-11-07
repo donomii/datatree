@@ -35,11 +35,18 @@ func readAWSChild(key string, value []byte, offset int64, length int64) ([]byte,
 	// For finite ranges retain only requested bytes while draining the stream.
 	args := s3ReadArgs(state)
 	assertReadOnlyAWSInvocation(args)
+	return withAWSLogin(config, args, func() ([]byte, error) {
+		return readS3Range(config, state, offset, length)
+	})
+}
+
+func readS3Range(config awsConfig, state mountState, offset int64, length int64) ([]byte, error) {
+	args := s3ReadArgs(state)
 	output := s3RangeBuffer{skip: offset, remaining: length}
 	stderr := awsBoundedBuffer{limit: config.maxOutputBytes}
 	cmd := exec.Command(config.executable, args...)
 	cmd.Stdout, cmd.Stderr = &output, &stderr
-	err = cmd.Run()
+	err := cmd.Run()
 	switch {
 	case err != nil || stderr.exceeded():
 		return nil, fmt.Errorf("cannot read S3 object %q from bucket %q: expected complete file bytes, got %v with %d stderr bytes (limit %d): %s", state.Key, state.Identifier, err, stderr.total, config.maxOutputBytes, stderr.data.String())

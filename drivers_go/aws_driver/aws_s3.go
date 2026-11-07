@@ -172,5 +172,5 @@ func listS3Objects(config awsConfig, state mountState) ([]driverlib.Resource, ma
 		}
 	default:
 	}
-	return resources, children, nil
+	return driverlib.RetainSource(resources, children, out)
 }

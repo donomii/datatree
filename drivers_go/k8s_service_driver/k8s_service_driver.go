@@ -46,11 +46,7 @@ func Run() {
 }
 
 func buildServiceView(raw []byte) ([]driverlib.Resource, map[string][]byte, error) {
-	switch message, isReadError := driverlib.DecodeDriverReadError(raw); {
-	case isReadError:
-		return nil, nil, fmt.Errorf("%s", message)
-	default:
-	}
+
 	doc := driverlib.RawObject(json.RawMessage(raw))
 	switch {
 	case len(doc) == 0:

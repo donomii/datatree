@@ -16,12 +16,14 @@ func Run() {
 }
 
 func listDiffLines(raw []byte) ([]driverlib.Resource, map[string][]byte, error) {
-	lines := strings.Split(strings.ReplaceAll(string(raw), "\r\n", "\n"), "\n")
+	lines := strings.SplitAfter(string(raw), "\n")
+	children := map[string][]byte{}
 	resources := make([]driverlib.Resource, 0, len(lines))
 	oldLine := int64(0)
 	newLine := int64(0)
 	inHunk := false
-	for _, line := range lines {
+	for _, original := range lines {
+		line := strings.TrimSuffix(strings.TrimSuffix(original, "\n"), "\r")
 		switch {
 		case line == "" && !inHunk:
 			continue
@@ -61,8 +63,13 @@ func listDiffLines(raw []byte) ([]driverlib.Resource, map[string][]byte, error) 
 			inHunk = false
 			resources = append(resources, diffResource("diff-meta", line))
 		}
+		// Preserve the actual input line, independently of the decorated label.
+		key := fmt.Sprintf("line-%d", len(resources)-1)
+		resources[len(resources)-1].Key = key
+		resources[len(resources)-1].Size = int64(len(original))
+		children[key] = []byte(original)
 	}
-	return resources, map[string][]byte{}, nil
+	return resources, children, nil
 }
 
 func parseLineNumber(raw string, header string) (int64, error) {

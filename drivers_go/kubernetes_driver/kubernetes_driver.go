@@ -198,6 +198,8 @@ func listContexts(config kubernetesConfig) ([]driverlib.Resource, map[string]chi
 		children[contextName] = childEntry{state: childState}
 	}
 	resources = appendTruncationNotice(resources, "kubeconfig contexts", total, config.maxResults)
+	resources = append(resources, driverlib.Resource{Name: "[source bytes]", Kind: "raw", Key: "\x00kubernetes:source", Size: int64(len(out)), Readable: true})
+	children["\x00kubernetes:source"] = childEntry{state: out}
 	return resources, children, nil
 }
 
@@ -231,6 +233,8 @@ func listContextChildren(config kubernetesConfig, state MountState) ([]driverlib
 		children[namespaceName] = childEntry{state: childState}
 	}
 	resources = appendTruncationNotice(resources, "namespaces", total, config.maxResults)
+	resources = append(resources, driverlib.Resource{Name: "[source bytes]", Kind: "raw", Key: "\x00kubernetes:source", Size: int64(len(out)), Readable: true})
+	children["\x00kubernetes:source"] = childEntry{state: out}
 	return resources, children, nil
 }
 
@@ -261,6 +265,8 @@ func listResourceTypes(config kubernetesConfig, state MountState, namespaced boo
 		children[typeName] = childEntry{state: childState}
 	}
 	resources = appendTruncationNotice(resources, "resource types", total, config.maxResults)
+	resources = append(resources, driverlib.Resource{Name: "[source bytes]", Kind: "raw", Key: "\x00kubernetes:source", Size: int64(len(out)), Readable: true})
+	children["\x00kubernetes:source"] = childEntry{state: out}
 	return resources, children, nil
 }
 
@@ -289,10 +295,12 @@ func listObjects(config kubernetesConfig, state MountState) ([]driverlib.Resourc
 	lines, total := outputLines(out, config.maxResults)
 	for _, line := range lines {
 		objectName := nameAfterSlash(line)
-		resources = append(resources, driverlib.Resource{Name: objectName, Kind: objectKind, Size: 0})
+		resources = append(resources, driverlib.Resource{Name: objectName, Kind: objectKind, Size: -1, Readable: true})
 		children[objectName] = childEntry{isObject: true}
 	}
 	resources = appendTruncationNotice(resources, "objects", total, config.maxResults)
+	resources = append(resources, driverlib.Resource{Name: "[source bytes]", Kind: "raw", Key: "\x00kubernetes:source", Size: int64(len(out)), Readable: true})
+	children["\x00kubernetes:source"] = childEntry{state: out}
 	return resources, children, nil
 }
 
@@ -345,9 +353,15 @@ func serveChildren(enc *json.Encoder, dec *json.Decoder, config kubernetesConfig
 		case req.Child == "" || !known:
 			driverlib.SendRange(enc, nil)
 		case child.isObject:
-			driverlib.SendRange(enc, driverlib.SliceRange(fetchObjectManifest(config, state, req.Child), req.Offset, req.Length))
+			data, err := fetchObjectManifest(config, state, req.Child)
+			switch {
+			case err != nil:
+				driverlib.SendRangeError(enc, err.Error())
+			default:
+				driverlib.SendRange(enc, driverlib.SliceRange(data, req.Offset, req.Length))
+			}
 		default:
-			driverlib.SendRange(enc, child.state)
+			driverlib.SendRange(enc, driverlib.SliceRange(child.state, req.Offset, req.Length))
 		}
 	}
 }
@@ -355,19 +369,19 @@ func serveChildren(enc *json.Encoder, dec *json.Decoder, config kubernetesConfig
 // fetchObjectManifest reads one object's manifest bytes. Failures become a
 // structured payload that every JSON and kubernetes presenter driver turns
 // into a visible error resource.
-func fetchObjectManifest(config kubernetesConfig, state MountState, objectName string) []byte {
+func fetchObjectManifest(config kubernetesConfig, state MountState, objectName string) ([]byte, error) {
 	switch err := safePositional(state.Type, "kubernetes resource type"); {
 	case err != nil:
 		message := fmt.Sprintf("refusing to fetch the manifest of %q: %v", objectName, err)
 		logKubernetesManifestFailure(message)
-		return driverlib.EncodeDriverReadError(message)
+		return nil, fmt.Errorf("%s", message)
 	default:
 	}
 	switch err := safePositional(objectName, "kubernetes object name"); {
 	case err != nil:
 		message := fmt.Sprintf("refusing to fetch a kubernetes manifest: %v", err)
 		logKubernetesManifestFailure(message)
-		return driverlib.EncodeDriverReadError(message)
+		return nil, fmt.Errorf("%s", message)
 	default:
 	}
 	args := []string{"get", "--context=" + state.Context}
@@ -383,9 +397,9 @@ func fetchObjectManifest(config kubernetesConfig, state MountState, objectName s
 	case err != nil:
 		message := fmt.Sprintf("cannot fetch the manifest of %s %q: %v", state.Type, objectName, err)
 		logKubernetesManifestFailure(message)
-		return driverlib.EncodeDriverReadError(message)
+		return nil, fmt.Errorf("%s", message)
 	default:
-		return out
+		return out, nil
 	}
 }
 

@@ -115,7 +115,7 @@ func listWorkflowRuns(config githubConfig, state mountState) ([]driverlib.Resour
 		resources = append(resources, driverlib.Resource{Name: name, Kind: "github", Size: 0})
 		children[name] = runState
 	}
-	return resources, children, nil
+	return driverlib.RetainSource(resources, children, out)
 }
 
 func workflowRunName(run workflowRunSummary) string {
@@ -169,7 +169,7 @@ func listWorkflowRun(config githubConfig, state mountState) ([]driverlib.Resourc
 	}
 	resources = append([]driverlib.Resource{{Name: runActionsEntryName, Kind: "github", Size: 0}}, resources...)
 	children[runActionsEntryName] = actionsState
-	return resources, children, nil
+	return driverlib.RetainSource(resources, children, out)
 }
 
 func listWorkflowRunActions(state mountState) ([]driverlib.Resource, map[string][]byte, error) {

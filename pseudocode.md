@@ -171,11 +171,42 @@ Datatree origin and browser metadata indicating a cross-origin request.
 Allow direct HTTP clients and ordinary navigation to the browser page.
 
 ```
+startup:
+    load or exclusively create the private installation recovery key
+    reject malformed or insecure key state rather than replacing it
+    try the last default loopback port, otherwise bind an available port
+    save the chosen default port for the next restart
+
+create rooted handle:
+    extend the source route with the chosen driver and exact child selector
+    encrypt and authenticate the route using the installation key and a fresh nonce
+    return the opaque versioned token and cache its runtime handle
+    use random non-recoverable identifiers for memory-only uploads
+
+resolve a handle for expansion, filtering, reading or an action target:
+    use its live runtime child when available
+    otherwise authenticate and decrypt its reconstruction route
+    rebuild the original root and read-only driver layers in an isolated namespace
+    require matching resource identity and kind; reject missing or ambiguous children
+    adopt the recreated sessions and alias the original handle to the new child
+    never replay a mutation during reconstruction
+
+provider reconnection:
+    recreate CLI-backed sessions using their existing credential stores
+    let normal provider credential refresh occur in the CLI
+    on expired configured AWS SSO or stored GitHub authentication:
+        renew the existing session once, without expanding permissions
+        retry the failed read once
+    expose browser sign-in or MFA requirements when the provider requires them
+    preserve memory-only upload expiry and reject unauthenticated routes
+```
+
+```
 GET  /api/list:
     return { resources: store.root_resources }
 
 POST /api/autoLoad { handle, kind }:
-    h = store.getHandle(handle)
+    h = store.resolveHandle(handle)
     driver = match kind:
         "directory"          -> "directory_driver"
         "git"                -> "git_driver"
@@ -278,6 +309,27 @@ if non-leaf:
 ```
 
 ## Browser upload
+
+```
+all byte filters:
+    retain the exact complete upstream input as a readable source-bytes child
+    expose source bytes even when the chosen filter rejects their format
+    keep raw source children non-auto-expanding to prevent recursive cycles
+    bind presenter values and extracted URLs to their supplied actual bytes
+    assign unique internal keys independently of repeated display labels
+
+all providers:
+    keep navigation and action states distinct from payload handles
+    retain original query-response bytes alongside curated provider views
+    serve Git blobs, Kubernetes manifests, ConfigMap/Secret entries and hardware nodes as actual bytes
+    allow the same downstream filters to mount on every readable handle
+
+range errors:
+    use an optional error field separate from file bytes
+    verify the declared size matches decoded data
+    forward failures through the host without converting them into file contents
+    never recognize errors by matching a file's JSON fields
+```
 
 ```
 on page load:

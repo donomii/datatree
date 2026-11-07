@@ -58,7 +58,7 @@ const searchJSONFields = "isDraft,number,repository,state,title,updatedAt,url"
 const pullRequestJSONFields = "additions,assignees,author,baseRefName,body,changedFiles,closedAt,comments,commits,createdAt,deletions,files,headRefName,isDraft,labels,latestReviews,mergeStateStatus,mergeable,mergedAt,mergedBy,milestone,number,reviewDecision,reviewRequests,state,statusCheckRollup,title,updatedAt,url"
 
 func Run() {
-	driverlib.Run("GitHub driver", buildGitHubView)
+	driverlib.RunProvider("GitHub driver", buildGitHubView)
 }
 
 func buildGitHubView(raw []byte) ([]driverlib.Resource, map[string][]byte, error) {
@@ -279,7 +279,7 @@ func listPullRequests(config githubConfig, view string) ([]driverlib.Resource, m
 		resources = append(resources, driverlib.Resource{Name: message, Kind: "error", Size: 0})
 	default:
 	}
-	return resources, children, nil
+	return driverlib.RetainSource(resources, children, out)
 }
 
 func validateSummary(summary pullRequestSummary) error {
@@ -356,7 +356,7 @@ func listPullRequest(config githubConfig, pullRequestURL string) ([]driverlib.Re
 	children[actionsEntryName] = actionsState
 	children[runsEntryName] = runsState
 	children[diffEntryName] = diffState
-	return resources, children, nil
+	return driverlib.RetainSource(resources, children, out)
 }
 
 func listPullRequestDiff(config githubConfig, pullRequestURL string) ([]driverlib.Resource, map[string][]byte, error) {

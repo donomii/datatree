@@ -660,6 +660,16 @@ func runHostSelfTest() error {
 		return fmt.Errorf("S3 composition self-test failed: %v", err)
 	default:
 	}
+	switch err := checkRestartRecovery(fixtureDir); {
+	case err != nil:
+		return fmt.Errorf("restart recovery self-test failed: %v", err)
+	default:
+	}
+	switch err := checkAllFilterBytes(store, archiveZip); {
+	case err != nil:
+		return fmt.Errorf("filter byte-contract self-test failed: %v", err)
+	default:
+	}
 	localMachineStore := NewStore()
 	defer localMachineStore.stopDrivers()
 	localMachineResources, err := localMachineStore.loadRootDriver()
@@ -671,6 +681,11 @@ func runHostSelfTest() error {
 	switch err := checkLocalMachineBrowse(localMachineStore, localMachineResources); {
 	case err != nil:
 		return err
+	default:
+	}
+	switch err := checkProfilerByteComposition(localMachineStore, localMachineResources); {
+	case err != nil:
+		return fmt.Errorf("hardware byte composition failed: %v", err)
 	default:
 	}
 	noteHandle, err := findResourceHandle(store, dirResources, "note.txt", "text")
@@ -745,7 +760,7 @@ func runHostSelfTest() error {
 	if err != nil {
 		return fmt.Errorf("kubernetes driver load failed for the kubernetes root: %v", err)
 	}
-	if len(contextResources) != 2 || contextResources[0].Name != "datatree-test-context" || contextResources[1].Name != "second-test-context" {
+	if len(contextResources) != 3 || contextResources[0].Name != "datatree-test-context" || contextResources[1].Name != "second-test-context" || contextResources[2].Kind != "raw" {
 		return fmt.Errorf("kubernetes contexts were not sorted and deduplicated: got %+v", contextResources)
 	}
 	contextHandle, err := findResourceHandle(store, contextResources, "datatree-test-context", "kubernetes")
@@ -901,7 +916,7 @@ func runHostSelfTest() error {
 	if err != nil {
 		return fmt.Errorf("kubernetes driver load failed with an unlimited result count: %v", err)
 	}
-	if len(unlimitedContexts) != 2 || unlimitedContexts[0].Name != "datatree-test-context" || unlimitedContexts[1].Name != "second-test-context" {
+	if len(unlimitedContexts) != 3 || unlimitedContexts[0].Name != "datatree-test-context" || unlimitedContexts[1].Name != "second-test-context" || unlimitedContexts[2].Kind != "raw" {
 		return fmt.Errorf("unlimited kubernetes results did not preserve every sorted context: got %+v", unlimitedContexts)
 	}
 	if err := os.Setenv("DATATREE_KUBERNETES_MAX_RESULTS", "1"); err != nil {
@@ -912,7 +927,7 @@ func runHostSelfTest() error {
 	if err != nil {
 		return fmt.Errorf("kubernetes driver load failed with a one-result limit: %v", err)
 	}
-	if len(limitedContexts) != 2 || limitedContexts[0].Name != "datatree-test-context" || limitedContexts[1].Kind != "error" || !strings.Contains(limitedContexts[1].Name, "first 1 of 2 kubeconfig contexts") {
+	if len(limitedContexts) != 3 || limitedContexts[0].Name != "datatree-test-context" || limitedContexts[1].Kind != "error" || !strings.Contains(limitedContexts[1].Name, "first 1 of 2 kubeconfig contexts") || limitedContexts[2].Kind != "raw" {
 		return fmt.Errorf("kubernetes result limit did not preserve one sorted result plus a truncation error: got %+v", limitedContexts)
 	}
 	if err := os.Setenv("DATATREE_KUBERNETES_MAX_OUTPUT_BYTES", "10"); err != nil {

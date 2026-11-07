@@ -36,11 +36,7 @@ func Run() {
 }
 
 func buildConfigView(raw []byte) ([]driverlib.Resource, map[string][]byte, error) {
-	switch message, isReadError := driverlib.DecodeDriverReadError(raw); {
-	case isReadError:
-		return nil, nil, fmt.Errorf("%s", message)
-	default:
-	}
+
 	var manifest ConfigManifest
 	switch err := json.Unmarshal(raw, &manifest); {
 	case err != nil:
@@ -89,9 +85,9 @@ func appendEntry(resources []driverlib.Resource, children map[string][]byte, key
 		}
 	default:
 	}
-	kind := "file"
+	kind := driverlib.KindForName(key)
 	switch {
-	case utf8.Valid(payload):
+	case kind == "file" && utf8.Valid(payload):
 		kind = "text"
 	default:
 	}

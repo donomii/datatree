@@ -85,7 +85,9 @@ func awsRemoteArgs(operation []string, profile string, region string) []string {
 
 func runReadOnlyAWS(config awsConfig, args []string) ([]byte, error) {
 	assertReadOnlyAWSInvocation(args)
-	return runAWSCommand(config, args, "reading AWS data", true)
+	return withAWSLogin(config, args, func() ([]byte, error) {
+		return runAWSCommand(config, args, "reading AWS data", true)
+	})
 }
 
 func runAWSCommand(config awsConfig, args []string, task string, tolerateMissingSetting bool) ([]byte, error) {

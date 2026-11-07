@@ -103,10 +103,25 @@ func ResolveExecutable() (string, error) {
 }
 
 func Run() {
-	driverlib.Run("System profiler driver", buildSystemProfilerView)
+	driverlib.RunProvider("System profiler driver", buildSystemProfilerView)
 }
 
 func buildSystemProfilerView(raw []byte) ([]driverlib.Resource, map[string][]byte, error) {
+	var descriptor struct {
+		APIVersion string `json:"apiVersion"`
+	}
+	switch err := json.Unmarshal(raw, &descriptor); {
+	case err == nil && descriptor.APIVersion == mountAPIVersion:
+		// Only root and legacy provider states use the navigation envelope.
+	default:
+		resources, children, err := listSystemProfilerValue(profileUSB, raw)
+		switch {
+		case err != nil:
+			return nil, nil, err
+		default:
+			return driverlib.WithSource(func([]byte) ([]driverlib.Resource, map[string][]byte, error) { return resources, children, nil })(raw)
+		}
+	}
 	config, configErr := resolveSystemProfilerConfig()
 	switch {
 	case configErr != nil:
@@ -134,7 +149,9 @@ func buildSystemProfilerView(raw []byte) ([]driverlib.Resource, map[string][]byt
 	default:
 		return nil, nil, fmt.Errorf("cannot browse local %s data: unsupported view %q", state.Profile, state.View)
 	}
-	return listSystemProfilerValue(state.Profile, value)
+	return driverlib.WithSource(func([]byte) ([]driverlib.Resource, map[string][]byte, error) {
+		return listSystemProfilerValue(state.Profile, value)
+	})(value)
 }
 
 func resolveSystemProfilerConfig() (systemProfilerConfig, error) {
@@ -353,7 +370,7 @@ func listSystemProfilerValue(profile string, value json.RawMessage) ([]driverlib
 	case "array":
 		return listSystemProfilerArray(profile, trimmed)
 	default:
-		return []driverlib.Resource{{Name: driverlib.RenderScalar(trimmed), Kind: "kv", Size: int64(len(trimmed))}}, map[string][]byte{}, nil
+		return []driverlib.Resource{{Name: driverlib.RenderScalar(trimmed), Kind: "kv", Size: int64(len(trimmed)), Payload: trimmed}}, map[string][]byte{}, nil
 	}
 }
 
@@ -477,17 +494,11 @@ func appendSystemProfilerValue(resources []driverlib.Resource, children map[stri
 	name := uniqueResourceName(label, usedNames)
 	switch driverlib.ClassifyJSON(trimmed) {
 	case "object", "array":
-		state, err := encodeNodeState(profile, trimmed)
-		switch {
-		case err != nil:
-			return nil, nil, err
-		default:
-		}
-		resources = append(resources, driverlib.Resource{Name: name, Kind: profile, Size: int64(len(trimmed))})
-		children[name] = state
+		resources = append(resources, driverlib.Resource{Name: name, Kind: profile, Size: int64(len(trimmed)), Readable: true})
+		children[name] = trimmed
 		return resources, children, nil
 	default:
-		resources = append(resources, driverlib.Resource{Name: name + ": " + driverlib.RenderScalar(trimmed), Kind: "kv", Size: int64(len(trimmed))})
+		resources = append(resources, driverlib.Resource{Name: name + ": " + driverlib.RenderScalar(trimmed), Kind: "kv", Size: int64(len(trimmed)), Payload: trimmed})
 		return resources, children, nil
 	}
 }

@@ -74,7 +74,7 @@ func listResourceSearch(config awsConfig, state mountState) ([]driverlib.Resourc
 			children[resource.name] = resource.raw
 		}
 	}
-	return resources, children, nil
+	return driverlib.RetainSource(resources, children, out)
 }
 
 func listResourceTypes(config awsConfig, state mountState) ([]driverlib.Resource, map[string][]byte, error) {
@@ -117,7 +117,7 @@ func listResourceTypes(config awsConfig, state mountState) ([]driverlib.Resource
 		resources = append(resources, driverlib.Resource{Name: summary.TypeName, Kind: "aws", Size: 0})
 		children[summary.TypeName] = stateBytes
 	}
-	return resources, children, nil
+	return driverlib.RetainSource(resources, children, out)
 }
 
 func listResources(config awsConfig, state mountState) ([]driverlib.Resource, map[string][]byte, error) {
@@ -163,7 +163,7 @@ func listResources(config awsConfig, state mountState) ([]driverlib.Resource, ma
 		resources = append(resources, driverlib.Resource{Name: description.Identifier, Kind: "aws", Size: 0})
 		children[description.Identifier] = stateBytes
 	}
-	return resources, children, nil
+	return driverlib.RetainSource(resources, children, out)
 }
 
 func listResource(config awsConfig, state mountState) ([]driverlib.Resource, map[string][]byte, error) {
@@ -206,13 +206,13 @@ func listResource(config awsConfig, state mountState) ([]driverlib.Resource, map
 	}
 	resources := []driverlib.Resource{
 		{Name: resourceActionsEntryName, Kind: "aws", Size: 0},
-		{Name: "identifier: " + state.Identifier, Kind: "kv", Size: int64(len(state.Identifier))},
-		{Name: "type: " + state.TypeName, Kind: "kv", Size: int64(len(state.TypeName))},
-		{Name: "region: " + state.Region, Kind: "kv", Size: int64(len(state.Region))},
+		driverlib.KV("identifier", state.Identifier),
+		driverlib.KV("type", state.TypeName),
+		driverlib.KV("region", state.Region),
 		{Name: propertiesEntryName, Kind: "json", Size: int64(len(properties))},
 	}
 	children := map[string][]byte{resourceActionsEntryName: actionsState, propertiesEntryName: properties}
-	return resources, children, nil
+	return driverlib.RetainSource(resources, children, out)
 }
 
 func listResourceActions(state mountState) ([]driverlib.Resource, map[string][]byte, error) {

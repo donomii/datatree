@@ -51,8 +51,8 @@ func TestBuildHardwareView(t *testing.T) {
 	switch {
 	case err != nil:
 		t.Fatalf("cannot build fake local hardware view: %v", err)
-	case len(children) != 0:
-		t.Fatalf("hardware overview retained unexpected expandable children: got %d expected 0", len(children))
+	case len(children) == 0:
+		t.Fatal("hardware overview lost its source bytes")
 	default:
 	}
 	switch _, found := findTestResource(resources, "model name: Datatree Test Mac", "kv"); {

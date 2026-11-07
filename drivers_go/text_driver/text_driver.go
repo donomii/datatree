@@ -19,7 +19,7 @@ func Run() {
 func listURLs(raw []byte) ([]driverlib.Resource, map[string][]byte, error) {
 	var resources []driverlib.Resource
 	for _, url := range urlPattern.FindAllString(string(raw), -1) {
-		resources = append(resources, driverlib.Resource{Name: url, Kind: "url", Size: int64(len(url))})
+		resources = append(resources, driverlib.Resource{Name: url, Kind: "url", Size: int64(len(url)), Payload: []byte(url)})
 	}
 	return resources, map[string][]byte{}, nil
 }

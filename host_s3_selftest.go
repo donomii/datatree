@@ -28,7 +28,12 @@ func checkS3Composition(store *Store, fakeAWSPath string, archive []byte) error 
 		{"archive.zip", archive}, {"unlabelled", archive}, {"data.json", jsonBytes}, {"large.txt", large}, {"empty.txt", []byte{}},
 		{"deep.zip", deep},
 	}
-	script := "#!/bin/sh\ncase \"$1 $2\" in\n's3api list-objects-v2') printf '%s' '{\"Contents\":["
+	script := "#!/bin/sh\ncase \"$1 $2\" in\n" +
+		"'configure list-profiles') printf 'default\\n' ;;\n" +
+		"'configure get') case \"$3\" in region) printf 'us-east-1\\n' ;; *) exit 0 ;; esac ;;\n" +
+		"'ec2 describe-regions') printf '%s' '{\"Regions\":[{\"RegionName\":\"us-east-1\",\"OptInStatus\":\"opt-in-not-required\"}]}' ;;\n" +
+		"'s3api list-buckets') printf '%s' '{\"Buckets\":[{\"Name\":\"example-bucket\"}]}' ;;\n" +
+		"'s3api list-objects-v2') printf '%s' '{\"Contents\":["
 	for index, object := range objects {
 		switch {
 		case index != 0:

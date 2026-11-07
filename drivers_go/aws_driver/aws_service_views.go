@@ -32,20 +32,22 @@ func listAWSServiceQuery(config awsConfig, state mountState) ([]driverlib.Resour
 		return nil, nil, err
 	default:
 	}
-	switch state.Operation {
-	case "ec2-instances":
-		return listEC2Instances(out, state)
-	case "ec2-security-groups":
-		return listEC2SecurityGroups(out, state)
-	case "s3-buckets":
-		return listS3Buckets(out, state)
-	case "iam-roles":
-		return listIAMRoles(out, state)
-	case "iam-policies":
-		return listIAMPolicies(out, state)
-	default:
-		return listAWSDataResources(out, state)
-	}
+	return driverlib.WithSource(func([]byte) ([]driverlib.Resource, map[string][]byte, error) {
+		switch state.Operation {
+		case "ec2-instances":
+			return listEC2Instances(out, state)
+		case "ec2-security-groups":
+			return listEC2SecurityGroups(out, state)
+		case "s3-buckets":
+			return listS3Buckets(out, state)
+		case "iam-roles":
+			return listIAMRoles(out, state)
+		case "iam-policies":
+			return listIAMPolicies(out, state)
+		default:
+			return listAWSDataResources(out, state)
+		}
+	})(out)
 }
 
 func rawAWSResponse(out []byte, operation string) ([]driverlib.Resource, map[string][]byte, error) {

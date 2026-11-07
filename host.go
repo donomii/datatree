@@ -2,10 +2,12 @@
 package main
 
 import (
+	"crypto/rand"
 	_ "embed"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"github.com/google/uuid"
 	"io"
 	"log"
 	"mime"
@@ -23,7 +25,6 @@ import (
 	csvdriver "datahumper/drivers_go/csv_driver"
 	diffdriver "datahumper/drivers_go/diff_driver"
 	directorydriver "datahumper/drivers_go/directory_driver"
-	"datahumper/drivers_go/driverlib"
 	gitdriver "datahumper/drivers_go/git_driver"
 	githubdriver "datahumper/drivers_go/github_driver"
 	htmldriver "datahumper/drivers_go/html_driver"
@@ -70,8 +71,9 @@ type RangeReq struct {
 }
 
 type RangeResp struct {
-	Data string `json:"data"`
-	Size int64  `json:"size"`
+	Data  string `json:"data"`
+	Size  int64  `json:"size"`
+	Error string `json:"error,omitempty"`
 }
 
 type Resource struct {
@@ -224,6 +226,9 @@ func (p *driverProc) requestRange(req RangeReq) (RangeResp, error) {
 // ---------------- Store / Router ----------------
 
 type Store struct {
+	recoveryKey            []byte
+	origins                map[string]routeOrigin
+	recoveryGate           chan struct{}
 	mu                     sync.RWMutex
 	blobs                  map[string]uploadedBlob
 	blobBytes              int64
@@ -245,6 +250,8 @@ type Store struct {
 }
 
 type ChildHandle struct {
+	Name       string
+	Route      *handleRoute
 	Hid        string
 	ChildName  string
 	Size       int64
@@ -257,7 +264,16 @@ func NewStore() *Store {
 }
 
 func NewStoreWithUploadLimits(maxUploadBytes int64, maxRetainedUploadBytes int64, uploadIdleTimeout time.Duration) *Store {
+	key := make([]byte, 32)
+	switch _, err := rand.Read(key); {
+	case err != nil:
+		panic(fmt.Sprintf("cannot initialize handle recovery key: %v", err))
+	default:
+	}
+	gate := make(chan struct{}, 1)
+	gate <- struct{}{}
 	return &Store{
+		recoveryKey: key, origins: map[string]routeOrigin{}, recoveryGate: gate,
 		blobs:                  map[string]uploadedBlob{},
 		handles:                map[string]ChildHandle{},
 		drivers:                map[string]*driverProc{},
@@ -509,6 +525,7 @@ func (s *Store) releaseBlobReservation(driverName string) {
 }
 
 func (s *Store) addHandle(h ChildHandle) string {
+	h = s.recoverableHandle(h)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if h.Hid == "" {
@@ -545,6 +562,7 @@ func (s *Store) takeDriver(name string, retireBlob bool) (*driverProc, bool) {
 	switch {
 	case ok:
 		delete(s.drivers, name)
+		delete(s.origins, name)
 		for handleID, handle := range s.handles {
 			switch {
 			case handle.DriverName == name:
@@ -587,6 +605,7 @@ func (s *Store) takeDrivers() map[string]*driverProc {
 	s.blobs = map[string]uploadedBlob{}
 	s.blobBytes = 0
 	s.driverBlobIDs = map[string]string{}
+	s.origins = map[string]routeOrigin{}
 	return drivers
 }
 
@@ -629,11 +648,8 @@ func (s *Store) reapIdleDrivers(idleFor time.Duration) []string {
 	return reaped
 }
 
-var idCounter = 0
-
 func newID(prefix string) string {
-	idCounter++
-	return fmt.Sprintf("%s-%d", prefix, idCounter)
+	return prefix + "-" + uuid.NewString()
 }
 
 // Range upstream (root blob)
@@ -654,7 +670,7 @@ func (s *Store) serveBlobRange(blobID string, off, length int64) (chunk []byte) 
 }
 
 // Range via driver for a child
-func (s *Store) serveChildRange(h ChildHandle, off, length int64) ([]byte, error) {
+func (s *Store) serveLiveChildRange(h ChildHandle, off, length int64) ([]byte, error) {
 	driver, ok := s.getDriver(h.DriverName)
 	if !ok {
 		return nil, fmt.Errorf("cannot serve range for handle %s child %s: driver %s is not running", h.Hid, h.ChildName, h.DriverName)
@@ -664,12 +680,22 @@ func (s *Store) serveChildRange(h ChildHandle, off, length int64) ([]byte, error
 	if err != nil {
 		return nil, fmt.Errorf("cannot serve range for handle %s child %s from driver %s: %v", h.Hid, h.ChildName, h.DriverName, err)
 	}
-	if resp.Size == 0 || resp.Data == "" {
+	switch {
+	case resp.Error != "":
+		return nil, fmt.Errorf("cannot read child %q: %s", h.ChildName, resp.Error)
+	default:
+	}
+	if resp.Size == 0 && resp.Data == "" {
 		return []byte{}, nil
 	}
 	raw, err := base64.StdEncoding.DecodeString(resp.Data)
 	if err != nil {
 		return nil, err
+	}
+	switch {
+	case int64(len(raw)) != resp.Size:
+		return nil, fmt.Errorf("invalid child range for %q: expected %d bytes, got %d", h.ChildName, resp.Size, len(raw))
+	default:
 	}
 	return raw, nil
 }
@@ -680,6 +706,7 @@ func (s *Store) loadRootDriver() (resources []Resource, err error) {
 	if _, ok := s.getDriver("root_driver"); ok {
 		s.stopDriverWithBlobPolicy("root_driver", false)
 	}
+	s.setOrigin("root_driver", routeOrigin{Route: handleRoute{Version: 1, Root: s.rootDirectory}, Driver: "root_driver"})
 
 	var proc *driverProc
 	switch {
@@ -722,6 +749,7 @@ func (s *Store) loadRootDriver() (resources []Resource, err error) {
 			// create handles for each resource
 			for _, r := range rm.Resources {
 				h := ChildHandle{
+					Name:       r.Name,
 					ChildName:  resourceKey(r),
 					Size:       r.Size,
 					Kind:       r.Kind,
@@ -746,10 +774,21 @@ func (s *Store) loadRootDriver() (resources []Resource, err error) {
 
 // Load driver for a handle and return resource list
 func (s *Store) loadDriverForHandle(driverName string, handle ChildHandle) (resources []Resource, err error) {
+	handle, err = s.resolveHandle(handle.Hid)
+	switch {
+	case err != nil:
+		return nil, err
+	default:
+	}
 	// Use unique driver name for this instance
 	driverInstanceName := fmt.Sprintf("%s_%s", driverName, handle.Hid)
 	if _, ok := s.getDriver(driverInstanceName); ok {
 		s.stopDriverWithBlobPolicy(driverInstanceName, false)
+	}
+	switch {
+	case handle.Route != nil:
+		s.setOrigin(driverInstanceName, routeOrigin{Route: *handle.Route, Driver: driverName})
+	default:
 	}
 
 	proc, err := startDriver(driverName)
@@ -768,12 +807,14 @@ func (s *Store) loadDriverForHandle(driverName string, handle ChildHandle) (reso
 		if msg.Cmd == "range" {
 			// Forward to parent driver
 			data, err2 := s.serveChildRange(handle, msg.Offset, msg.Length)
-			if err2 != nil {
-				return nil, err2
-			}
 			resp := RangeResp{
 				Data: base64.StdEncoding.EncodeToString(data),
 				Size: int64(len(data)),
+			}
+			switch {
+			case err2 != nil:
+				resp.Error = err2.Error()
+			default:
 			}
 			if err := proc.enc.Encode(resp); err != nil {
 				return nil, err
@@ -785,6 +826,7 @@ func (s *Store) loadDriverForHandle(driverName string, handle ChildHandle) (reso
 			// create handles for each resource
 			for _, r := range rm.Resources {
 				h := ChildHandle{
+					Name:       r.Name,
 					ChildName:  resourceKey(r),
 					Size:       r.Size,
 					Kind:       r.Kind,
@@ -853,6 +895,7 @@ func (s *Store) loadDriverForBlob(driverName string, blobID string) (resources [
 			// create handles for each resource
 			for _, r := range rm.Resources {
 				h := ChildHandle{
+					Name:       r.Name,
 					ChildName:  resourceKey(r),
 					Size:       r.Size,
 					Kind:       r.Kind,
@@ -903,7 +946,7 @@ func driverForKind(kind string) (string, bool) {
 		return "k8s_configmap_driver", true
 	case "k8s-node":
 		return "k8s_node_driver", true
-	case "url", "error", "kv":
+	case "url", "error", "kv", "raw":
 		return "", false
 	case "image":
 		return "image_driver", true
@@ -985,6 +1028,13 @@ func runEmbeddedDriver(driverName string, args []string) {
 
 func main() {
 	switch {
+	case len(os.Args) == 2 && os.Args[1] == "-test-recovery-worker":
+		switch err := runRecoveryWorker(); {
+		case err != nil:
+			log.Fatal(err)
+		default:
+			return
+		}
 	case len(os.Args) > 2 && os.Args[1] == "--driver":
 		runEmbeddedDriver(os.Args[2], os.Args[3:])
 		return
@@ -1016,7 +1066,12 @@ func main() {
 		logRootDirectoryFailure(err)
 	default:
 	}
-	store := newConfiguredStore()
+	store, recoveryErr := openPersistentStore()
+	switch {
+	case recoveryErr != nil:
+		log.Fatal(recoveryErr)
+	default:
+	}
 	store.rootDirectory = rootDirectory
 	logRootDirectory(rootDirectory)
 
@@ -1170,9 +1225,9 @@ func main() {
 			http.Error(w, err.Error(), 400)
 			return
 		}
-		h, ok := store.getHandle(req.Handle)
-		if !ok {
-			http.Error(w, "unknown handle", 404)
+		h, recoveryErr := store.resolveHandle(req.Handle)
+		if recoveryErr != nil {
+			http.Error(w, recoveryErr.Error(), 404)
 			return
 		}
 
@@ -1208,9 +1263,9 @@ func main() {
 			http.Error(w, fmt.Sprintf("cannot decode /api/loadChild request: expected JSON with handle and optional driver, got error: %v", err), 400)
 			return
 		}
-		h, ok := store.getHandle(req.Handle)
-		if !ok {
-			http.Error(w, fmt.Sprintf("cannot load child: handle %s is unknown", req.Handle), 404)
+		h, recoveryErr := store.resolveHandle(req.Handle)
+		if recoveryErr != nil {
+			http.Error(w, recoveryErr.Error(), 404)
 			return
 		}
 		driver := req.Driver
@@ -1263,9 +1318,9 @@ func main() {
 		off := parseI64(r.URL.Query().Get("offset"), 0)
 		length := parseI64(r.URL.Query().Get("length"), -1)
 
-		h, ok := store.getHandle(hid)
-		if !ok {
-			http.Error(w, "unknown handle", 404)
+		h, recoveryErr := store.resolveHandle(hid)
+		if recoveryErr != nil {
+			http.Error(w, recoveryErr.Error(), 404)
 			return
 		}
 		chunk, err := store.serveChildRange(h, off, length)
@@ -1273,19 +1328,13 @@ func main() {
 			http.Error(w, err.Error(), 500)
 			return
 		}
-		switch message, isError := driverlib.DecodeDriverReadError(chunk); {
-		case isError:
-			http.Error(w, message, http.StatusBadGateway)
-			return
-		default:
-		}
 		w.Header().Set("Content-Type", "application/octet-stream")
 		w.Header().Set("Content-Length", strconv.Itoa(len(chunk)))
 		_, _ = w.Write(chunk)
 	})
 
 	addr := resolveListenAddr()
-	listener, err := net.Listen("tcp", addr)
+	listener, err := listenPersistent(addr)
 	switch {
 	case err != nil:
 		logListenFailure(addr, err)
@@ -1346,10 +1395,10 @@ func awsActionHandler(store *Store) http.HandlerFunc {
 }
 
 func executeAWSAction(store *Store, req AWSActionRequest) (string, error) {
-	handle, known := store.getHandle(req.Handle)
+	handle, recoveryErr := store.resolveHandle(req.Handle)
 	switch {
-	case !known:
-		return "", fmt.Errorf("cannot execute AWS action: handle %q is unknown", req.Handle)
+	case recoveryErr != nil:
+		return "", fmt.Errorf("cannot execute AWS action: handle %q is unknown or unavailable: %v", req.Handle, recoveryErr)
 	case !strings.HasPrefix(handle.Kind, "aws-action-"):
 		return "", fmt.Errorf("cannot execute AWS action for handle %q: expected kind aws-action-*, got %q", req.Handle, handle.Kind)
 	default:
@@ -1401,10 +1450,10 @@ func githubActionHandler(store *Store) http.HandlerFunc {
 }
 
 func executeGitHubAction(store *Store, req GitHubActionRequest) (string, error) {
-	handle, known := store.getHandle(req.Handle)
+	handle, recoveryErr := store.resolveHandle(req.Handle)
 	switch {
-	case !known:
-		return "", fmt.Errorf("cannot execute GitHub action: handle %q is unknown", req.Handle)
+	case recoveryErr != nil:
+		return "", fmt.Errorf("cannot execute GitHub action: handle %q is unknown or unavailable: %v", req.Handle, recoveryErr)
 	case !strings.HasPrefix(handle.Kind, "github-action-"):
 		return "", fmt.Errorf("cannot execute GitHub action for handle %q: expected kind github-action-*, got %q", req.Handle, handle.Kind)
 	default:

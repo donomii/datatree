@@ -8,8 +8,8 @@ func TestListDiffLines(t *testing.T) {
 	switch {
 	case err != nil:
 		t.Fatalf("diff parse failed: %v", err)
-	case len(children) != 0:
-		t.Fatalf("diff line view unexpectedly served children: %+v", children)
+	case len(children) != len(resources):
+		t.Fatalf("diff lines lost their byte payloads: got %d for %d resources", len(children), len(resources))
 	case len(resources) != 10:
 		t.Fatalf("diff resource count mismatch: got %d expected 10: %+v", len(resources), resources)
 	default:
@@ -32,6 +32,11 @@ func TestListDiffLines(t *testing.T) {
 			t.Errorf("diff row %d mismatch: got %+v expected name %q kind %q", want.index, got, want.name, want.kind)
 		default:
 		}
+	}
+	switch got := string(children[resources[7].Key]); {
+	case got != "+new line\n":
+		t.Fatalf("expected original diff bytes, got %q", got)
+	default:
 	}
 }
 

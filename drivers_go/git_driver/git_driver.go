@@ -83,6 +83,23 @@ func Run() {
 		return
 	default:
 	}
+	for index := range resources {
+		resource := &resources[index]
+		switch {
+		case resource.Payload != nil:
+			key := fmt.Sprintf("\x00git:value:%d", index)
+			children[key] = childEntry{state: resource.Payload}
+			resource.Key, resource.Readable = key, true
+		default:
+			key := resource.Key
+			switch {
+			case key == "":
+				key = resource.Name
+			default:
+			}
+			resource.Readable = children[key].source.mode != ""
+		}
+	}
 	switch err := enc.Encode(driverlib.ResourcesMsg{Resources: resources}); {
 	case err != nil:
 		logGitResourceEncodeFailure(state.Repository, state.View, len(resources), err)
@@ -455,13 +472,13 @@ func serveChildren(enc *json.Encoder, dec *json.Decoder, config gitConfig, child
 		case req.Child == "" || !known:
 			driverlib.SendRange(enc, nil)
 		case len(child.state) > 0:
-			driverlib.SendRange(enc, child.state)
+			driverlib.SendRange(enc, driverlib.SliceRange(child.state, req.Offset, req.Length))
 		default:
 			data, readErr := readSource(config, child.source)
 			switch {
 			case readErr != nil:
 				logGitFileReadFailure(config.repository, child.source.mode, child.source.path, readErr)
-				driverlib.SendRange(enc, []byte(readErr.Error()))
+				driverlib.SendRangeError(enc, readErr.Error())
 			default:
 				driverlib.SendRange(enc, driverlib.SliceRange(data, req.Offset, req.Length))
 			}
@@ -472,9 +489,9 @@ func serveChildren(enc *json.Encoder, dec *json.Decoder, config gitConfig, child
 func readSource(config gitConfig, source fileSource) ([]byte, error) {
 	switch source.mode {
 	case sourceRevision:
-		return runGit(config, []string{"show", "--no-textconv", source.revision + ":" + source.path})
+		return runGitFile(config, []string{"show", "--no-textconv", source.revision + ":" + source.path})
 	case sourceIndex:
-		return runGit(config, []string{"show", "--no-textconv", ":" + source.path})
+		return runGitFile(config, []string{"show", "--no-textconv", ":" + source.path})
 	case sourceWorktree:
 		return readWorkingFile(config, source.path)
 	default:
@@ -503,8 +520,6 @@ func readWorkingFile(config gitConfig, path string) ([]byte, error) {
 		}
 	case !info.Mode().IsRegular():
 		return nil, fmt.Errorf("cannot read working-tree path %q from repository %s: expected a regular file or symbolic link, got mode %s", path, config.repository, info.Mode())
-	case info.Size() > config.maxOutputBytes:
-		return nil, fmt.Errorf("cannot read working-tree file %q from repository %s: file size %d exceeds DATATREE_GIT_MAX_OUTPUT_BYTES=%d", path, config.repository, info.Size(), config.maxOutputBytes)
 	default:
 	}
 	data, readErr := os.ReadFile(fullPath)

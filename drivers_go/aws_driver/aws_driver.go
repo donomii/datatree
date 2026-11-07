@@ -264,7 +264,7 @@ func listProfiles(config awsConfig) ([]driverlib.Resource, map[string][]byte, er
 		resources = append(resources, driverlib.Resource{Name: "AWS CLI has no configured profiles", Kind: "error", Size: 0})
 	default:
 	}
-	return resources, children, nil
+	return driverlib.RetainSource(resources, children, out)
 }
 
 func listProfile(config awsConfig, state mountState) ([]driverlib.Resource, map[string][]byte, error) {
@@ -277,7 +277,7 @@ func listProfile(config awsConfig, state mountState) ([]driverlib.Resource, map[
 		case err != nil:
 			return nil, nil, err
 		case strings.TrimSpace(string(out)) != "":
-			resources = append(resources, driverlib.Resource{Name: setting + ": " + strings.TrimSpace(string(out)), Kind: "kv", Size: int64(len(strings.TrimSpace(string(out))))})
+			resources = append(resources, driverlib.Resource{Name: setting + ": " + strings.TrimSpace(string(out)), Kind: "kv", Size: int64(len(out)), Payload: out})
 		default:
 		}
 	}
@@ -353,7 +353,7 @@ func listRegions(config awsConfig, state mountState) ([]driverlib.Resource, map[
 		resources = append(resources, driverlib.Resource{Name: name, Kind: "aws", Size: 0})
 		children[name] = regionState
 	}
-	return resources, children, nil
+	return driverlib.RetainSource(resources, children, out)
 }
 
 func listRegion(state mountState) ([]driverlib.Resource, map[string][]byte, error) {

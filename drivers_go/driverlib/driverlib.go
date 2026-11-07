@@ -29,8 +29,9 @@ type RangeReq struct {
 }
 
 type RangeResp struct {
-	Data string `json:"data"`
-	Size int64  `json:"size"`
+	Data  string `json:"data"`
+	Size  int64  `json:"size"`
+	Error string `json:"error,omitempty"`
 }
 
 type Resource struct {
@@ -39,6 +40,7 @@ type Resource struct {
 	Size     int64  `json:"size"`
 	Key      string `json:"key,omitempty"`
 	Readable bool   `json:"readable,omitempty"`
+	Payload  []byte `json:"-"`
 }
 
 type ResourcesMsg struct {
@@ -64,9 +66,7 @@ type ListFunc func(raw []byte) ([]Resource, map[string][]byte, error)
 // driver whose listing produced no servable children is a leaf: it exits
 // immediately after emitting, matching the driver protocol's leaf rule.
 func Run(name string, list ListFunc) {
-	RunWithReader(name, list, func(_ string, value []byte, offset int64, length int64) ([]byte, error) {
-		return SliceRange(value, offset, length), nil
-	})
+	RunWithReader(name, WithSource(list), memoryChild)
 }
 
 // RunWithReader resolves lazy children through the ordinary byte protocol.
@@ -93,6 +93,7 @@ func RunWithReader(name string, list ListFunc, read func(string, []byte, int64, 
 	default:
 	}
 
+	resources, children = BindPayloads(resources, children)
 	for index := range resources {
 		key := resources[index].Key
 		switch {
@@ -101,7 +102,7 @@ func RunWithReader(name string, list ListFunc, read func(string, []byte, int64, 
 		default:
 		}
 		switch resources[index].Kind {
-		case "aws", "github", "directory", "git", "hardware", "usb", "kubernetes":
+		case "aws", "github", "directory", "git", "kubernetes":
 			resources[index].Readable = false
 		default:
 			_, resources[index].Readable = children[key]
@@ -147,17 +148,19 @@ func FetchUpstreamBytes(enc *json.Encoder, dec *json.Decoder) ([]byte, error) {
 		return nil, fmt.Errorf("failed to decode the document response from the parent driver: %v", err)
 	default:
 	}
+	switch {
+	case resp.Error != "":
+		return nil, fmt.Errorf("cannot read upstream data: %s", resp.Error)
+	default:
+	}
 	raw, err := base64.StdEncoding.DecodeString(resp.Data)
 	switch {
 	case err != nil:
 		return nil, fmt.Errorf("cannot decode the payload: expected base64 bytes from the parent driver, got decode error: %v", err)
+	case int64(len(raw)) != resp.Size:
+		return nil, fmt.Errorf("cannot read upstream data: response declared %d bytes but supplied %d", resp.Size, len(raw))
 	default:
-		switch message, isError := DecodeDriverReadError(raw); {
-		case isError:
-			return nil, fmt.Errorf("cannot read upstream data: %s", message)
-		default:
-			return raw, nil
-		}
+		return raw, nil
 	}
 }
 
@@ -191,7 +194,7 @@ func ServeChildrenWithReader(enc *json.Encoder, dec *json.Decoder, children map[
 			data, err := read(req.Child, value, req.Offset, req.Length)
 			switch {
 			case err != nil:
-				SendRange(enc, EncodeDriverReadError(err.Error()))
+				SendRangeError(enc, err.Error())
 			default:
 				SendRange(enc, data)
 			}
@@ -331,7 +334,7 @@ func ListDirectory(dirPath string) ([]Resource, error) {
 			}
 			resources = append(resources, Resource{Name: name, Kind: kind, Size: 0})
 		default:
-			resources = append(resources, Resource{Name: name, Kind: KindForName(name), Size: info.Size()})
+			resources = append(resources, Resource{Name: name, Kind: KindForName(name), Size: info.Size(), Readable: true})
 		}
 	}
 	return resources, nil
@@ -400,12 +403,12 @@ func InsideBase(basePath string, targetPath string) bool {
 // already passed the caller's InsideBase check. A directory child is served as
 // its absolute path bytes (the payload directory_driver mounts on); a file
 // child is served as the requested byte range. Every failure is served as an
-// empty range so the protocol stays in step.
+// explicit protocol error so failures cannot masquerade as empty files.
 func ServeFileChild(enc *json.Encoder, fullPath string, offset int64, length int64) {
 	info, err := os.Stat(fullPath)
 	switch {
 	case err != nil:
-		SendRange(enc, nil)
+		SendRangeError(enc, fmt.Sprintf("cannot stat file %q: %v", fullPath, err))
 		return
 	case info.IsDir():
 		// Send directory path as bytes
@@ -416,14 +419,14 @@ func ServeFileChild(enc *json.Encoder, fullPath string, offset int64, length int
 	file, err := os.Open(fullPath)
 	switch {
 	case err != nil:
-		SendRange(enc, nil)
+		SendRangeError(enc, fmt.Sprintf("cannot open file %q: %v", fullPath, err))
 		return
 	default:
 	}
 	defer file.Close()
 	switch _, seekErr := file.Seek(offset, 0); {
 	case seekErr != nil:
-		SendRange(enc, nil)
+		SendRangeError(enc, fmt.Sprintf("cannot seek file %q to byte %d: %v", fullPath, offset, seekErr))
 		return
 	default:
 	}
@@ -446,9 +449,9 @@ func ServeFileChild(enc *json.Encoder, fullPath string, offset int64, length int
 	n, readErr := io.ReadFull(file, data)
 	switch {
 	case readErr != nil && readErr != io.EOF:
-		// A short read means the file changed underneath us; serve an empty
+		// A short read means the file changed underneath us; report the failed
 		// range rather than bytes that no longer match the listed size.
-		SendRange(enc, nil)
+		SendRangeError(enc, fmt.Sprintf("cannot read file %q at byte %d: expected %d bytes, got %d: %v", fullPath, offset, toRead, n, readErr))
 	default:
 		SendRange(enc, data[:n])
 	}
@@ -499,7 +502,7 @@ func TrimmedBytes(value json.RawMessage) []byte {
 
 // KV builds a non-expandable leaf resource that displays "label: value".
 func KV(label string, value string) Resource {
-	return Resource{Name: label + ": " + value, Kind: "kv", Size: int64(len(value))}
+	return Resource{Name: label + ": " + value, Kind: "kv", Size: int64(len(value)), Payload: []byte(value)}
 }
 
 // Section describes an expandable "json" child for a raw JSON value under the
@@ -539,11 +542,7 @@ func TopFields(raw []byte) (map[string]json.RawMessage, error) {
 // scalar becomes a "kv" leaf shown as "key: value". All values retain their
 // serialized bytes for download and explicit filter composition.
 func ListGenericJSON(raw []byte) ([]Resource, map[string][]byte, error) {
-	switch message, isReadError := DecodeDriverReadError(raw); {
-	case isReadError:
-		return nil, nil, fmt.Errorf("%s", message)
-	default:
-	}
+
 	switch ClassifyJSON(raw) {
 	case "object":
 		return listObjectFields(raw)
@@ -573,7 +572,7 @@ func listObjectFields(raw []byte) ([]Resource, map[string][]byte, error) {
 	for _, name := range names {
 		resource, _ := DescribeChild(name, fields[name])
 		resources = append(resources, resource)
-		children[resource.Name] = TrimmedBytes(fields[name])
+		children[resource.Key] = TrimmedBytes(fields[name])
 	}
 	return resources, children, nil
 }
@@ -591,7 +590,7 @@ func listArrayElements(raw []byte) ([]Resource, map[string][]byte, error) {
 		key := "[" + strconv.Itoa(index) + "]"
 		resource, _ := DescribeChild(key, value)
 		resources = append(resources, resource)
-		children[resource.Name] = TrimmedBytes(value)
+		children[resource.Key] = TrimmedBytes(value)
 	}
 	return resources, children, nil
 }
@@ -607,7 +606,7 @@ func listScalar(raw []byte) ([]Resource, map[string][]byte, error) {
 	case !json.Valid(trimmed):
 		return nil, nil, fmt.Errorf("cannot parse JSON document: expected an object, array, or scalar, got %d bytes that are not valid JSON: %.80q", len(raw), string(trimmed))
 	default:
-		return []Resource{{Name: RenderScalar(trimmed), Kind: "kv", Size: int64(len(trimmed))}}, map[string][]byte{RenderScalar(trimmed): trimmed}, nil
+		return []Resource{{Name: RenderScalar(trimmed), Kind: "kv", Key: "\x00json:scalar", Size: int64(len(trimmed))}}, map[string][]byte{"\x00json:scalar": trimmed}, nil
 	}
 }
 
@@ -616,11 +615,12 @@ func listScalar(raw []byte) ([]Resource, map[string][]byte, error) {
 // scalar values become non-expandable "kv" leaves that display "key: value".
 func DescribeChild(key string, value json.RawMessage) (Resource, bool) {
 	size := int64(len(TrimmedBytes(value)))
+	internalKey := "\x00json:field:" + key
 	switch ClassifyJSON(value) {
 	case "object", "array":
-		return Resource{Name: key, Kind: "json", Size: size}, true
+		return Resource{Name: key, Key: internalKey, Kind: "json", Size: size}, true
 	default:
-		return Resource{Name: key + ": " + RenderScalar(value), Kind: "kv", Size: size}, false
+		return Resource{Name: key + ": " + RenderScalar(value), Key: internalKey, Kind: "kv", Size: size}, false
 	}
 }
 

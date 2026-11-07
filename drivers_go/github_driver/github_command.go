@@ -70,6 +70,12 @@ func workflowRunViewArgs(repository string, runID int64) []string {
 
 func runReadOnlyGitHub(config githubConfig, args []string) ([]byte, error) {
 	assertReadOnlyGitHubInvocation(args)
+	return withGitHubLogin(config, func() ([]byte, error) {
+		return runGitHubRead(config, args)
+	})
+}
+
+func runGitHubRead(config githubConfig, args []string) ([]byte, error) {
 	cmd := exec.Command(config.executable, args...)
 	stdout := boundedBuffer{limit: config.maxOutputBytes}
 	stderr := boundedBuffer{limit: config.maxOutputBytes}

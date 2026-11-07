@@ -247,7 +247,7 @@ func checkGitHubBrowse(store *Store, rootResources []Resource) error {
 	switch {
 	case err != nil:
 		return fmt.Errorf("GitHub driver load failed for review-requested pull requests: %v", err)
-	case len(reviewResources) != 0:
+	case len(reviewResources) != 1 || reviewResources[0].Kind != "raw":
 		return fmt.Errorf("GitHub review-requested list mismatch: expected no pull requests, got %+v", reviewResources)
 	default:
 	}

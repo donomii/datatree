@@ -239,7 +239,7 @@
     }
 
     function hasContentBytes(resource) {
-      return !isAction(resource.kind) && !['error', 'url', 'directory', 'git', 'aws', 'github', 'hardware', 'usb', 'kubernetes'].includes(resource.kind) && (resource.readable || ['archive', 'zip', 'file', 'text', 'json', 'image', 'pdf', 'html', 'csv', 'diff'].includes(resource.kind));
+      return !isAction(resource.kind) && resource.kind !== 'error' && (resource.readable || ['archive', 'zip', 'file', 'text', 'json', 'image', 'pdf', 'html', 'csv', 'diff'].includes(resource.kind));
     }
 
     function renderDirectory(container, resources, parentPath = null) {
