@@ -311,6 +311,18 @@ if non-leaf:
 ## Browser upload
 
 ```
+floating fold control:
+    associate every expanded tree with its owning resource row and nesting depth
+    on scroll, resize or tree changes, inspect expanded branches intersecting the viewport
+    select the deepest branch crossing the upper reading line, otherwise the nearest visible branch
+    show its name in a fixed fold button; hide the control when no branch is visible
+    on click, recompute the target and close only that branch
+    preserve sibling and ancestor views; return to the collapsed branch's row
+    release removed preview URLs and prevent pending reads from re-opening detached views
+    hide uploaded-root contents without releasing their bytes; allow the row arrow to reopen them
+```
+
+```
 all byte filters:
     retain the exact complete upstream input as a readable source-bytes child
     expose source bytes even when the chosen filter rejects their format

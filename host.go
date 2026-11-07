@@ -1124,6 +1124,7 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
+	mountFoldControl(mux)
 
 	// static
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {

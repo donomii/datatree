@@ -27,6 +27,7 @@
     .error { color: #9b1c1c; font-size: 0.9rem; }
     button { padding: 0.25rem 0.5rem; font-size: 0.8rem; }
     a.download { font-size: 0.8rem; }
+    #fold-current { position: fixed; right: 1rem; bottom: 1rem; z-index: 20; max-width: min(22rem, calc(100vw - 2rem)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: .65rem .9rem; border: 1px solid #aaa; border-radius: .6rem; background: #fff; color: #174b80; box-shadow: 0 2px 12px #0003; }
     .upload { margin: 0 0 1.5rem 0; display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
     .upload select { padding: 0.2rem; font-size: 0.8rem; }
     @media (max-width: 600px) {
@@ -61,6 +62,8 @@
 
   <!-- Directory tree -->
   <div id="tree"></div>
+  <button type="button" id="fold-current" hidden title="Scroll into an expanded branch to fold up that branch only">↑ Fold up</button>
+  <script src="/static/fold.js" defer></script>
 
   <script>
     // Simple event handler using document ready and fetch
@@ -193,9 +196,34 @@
           }
         };
         subContainer.appendChild(unloadButton);
-        await appendContentPreview(subContainer, {name: file.name, kind: driver.replace('_driver', ''), size: file.size}, null, file);
+        const uploadRow = document.createElement('div');
+        uploadRow.className = 'file-item';
+        const uploadExpander = document.createElement('span');
+        uploadExpander.className = 'expander';
+        const uploadToggle = document.createElement('button');
+        uploadToggle.type = 'button';
+        uploadToggle.textContent = '▾';
+        uploadToggle.title = 'Collapse this uploaded tree without releasing its bytes';
+        uploadExpander.appendChild(uploadToggle);
+        const uploadName = document.createElement('code');
+        uploadName.textContent = file.name;
+        uploadRow.append(uploadExpander, uploadName);
+        const uploadContent = document.createElement('div');
+        uploadContent.className = 'tree';
+        uploadContent.foldByHiding = true;
+        rememberBranch(uploadContent, uploadRow, file.name);
+        uploadToggle.onclick = () => {
+          if (uploadContent.hidden) {
+            uploadContent.hidden = false;
+            setExpansionState(uploadRow, true);
+          } else {
+            collapseBranch(uploadRow);
+          }
+        };
+        subContainer.append(uploadRow, uploadContent);
+        await appendContentPreview(uploadContent, {name: file.name, kind: driver.replace('_driver', ''), size: file.size}, null, file);
         const treeContents = document.createElement('div');
-        subContainer.appendChild(treeContents);
+        uploadContent.appendChild(treeContents);
         if (data.resources && data.resources.length > 0) {
             renderDirectory(treeContents, data.resources, null);
         } else {
@@ -767,7 +795,7 @@
 
     async function expandRenderedResources(rendered) {
       for (const child of rendered) {
-        if (child.handle && isExpandable(child.resource.kind)) {
+        if (child.item.isConnected && child.handle && isExpandable(child.resource.kind)) {
           await expandResource(child.item, child.resource, child.handle, child.name, child.path, true);
         } else {
           // Leaves have no descendants to expand
@@ -876,15 +904,7 @@
           setExpansionState(item, true);
           await expandRenderedResources(next.renderedResources || []);
         } else {
-          for (const node of [next, ...next.querySelectorAll('.tree')]) {
-            if (node.previewURL) {
-              URL.revokeObjectURL(node.previewURL);
-            } else {
-              // This node has no allocated media preview.
-            }
-          }
-          next.remove();
-          setExpansionState(item, false);
+          collapseBranch(item);
         }
         if (selectedDriver === null || recursively) {
           return;
@@ -895,6 +915,7 @@
 
       const subContainer = document.createElement('div');
       subContainer.className = 'tree';
+      rememberBranch(subContainer, item, name);
       subContainer.style.marginTop = '0.5rem';
       
       const header = document.createElement('div');
@@ -918,9 +939,24 @@
         }
         
         const data = await response.json();
+        if (!subContainer.isConnected) {
+          return;
+        } else {
+          // Continue only while the user still has this branch open.
+        }
         header.textContent = `${name} (${data.driver})`;
         const previewResource = selectedDriver ? {...resource, kind: selectedDriver.replace('_driver', '')} : resource;
         const hasPreview = await appendContentPreview(subContainer, previewResource, handle);
+        if (!subContainer.isConnected) {
+          if (subContainer.previewURL) {
+            URL.revokeObjectURL(subContainer.previewURL);
+          } else {
+            // Text previews need no resource cleanup.
+          }
+          return;
+        } else {
+          // A preview read may finish after the user has folded its branch.
+        }
         
         if (data.resources && data.resources.length > 0) {
           const contentDiv = document.createElement('div');
