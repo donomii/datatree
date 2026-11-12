@@ -9,6 +9,12 @@ import (
 
 // Exercise the real provider/filter subprocess protocol, never an AWS account.
 func checkS3Composition(store *Store, fakeAWSPath string, archive []byte) error {
+	formats, err := makeFormatsFixture()
+	switch {
+	case err != nil:
+		return err
+	default:
+	}
 	jsonBytes := []byte(`{"nested":{"answer":42},"text":"visible value"}`)
 	large := bytes.Repeat([]byte("data\n"), 1800000)
 	deep := archive
@@ -27,6 +33,8 @@ func checkS3Composition(store *Store, fakeAWSPath string, archive []byte) error 
 	}{
 		{"archive.zip", archive}, {"unlabelled", archive}, {"data.json", jsonBytes}, {"large.txt", large}, {"empty.txt", []byte{}},
 		{"deep.zip", deep},
+		{"table.tsv", []byte(tsvFixture)},
+		{"formats.tgz", formats},
 	}
 	script := "#!/bin/sh\ncase \"$1 $2\" in\n" +
 		"'configure list-profiles') printf 'default\\n' ;;\n" +
@@ -80,6 +88,10 @@ func checkS3Composition(store *Store, fakeAWSPath string, archive []byte) error 
 			kind = "archive"
 		case "data.json":
 			kind = "json"
+		case "table.tsv":
+			kind = "tsv"
+		case "formats.tgz":
+			kind = "gzip"
 		case "large.txt", "empty.txt":
 			kind = "text"
 		default:
@@ -97,6 +109,18 @@ func checkS3Composition(store *Store, fakeAWSPath string, archive []byte) error 
 		default:
 		}
 		switch object.name {
+		case "formats.tgz":
+			switch err := checkFormatsComposition(store, handle); {
+			case err != nil:
+				return err
+			default:
+			}
+		case "table.tsv":
+			switch err := checkTSVComposition(store, handle); {
+			case err != nil:
+				return err
+			default:
+			}
 		case "deep.zip":
 			for layer := 0; layer < 12; layer++ {
 				children, err := store.loadDriverForHandle("zip_driver", handle)
@@ -166,6 +190,17 @@ func checkS3NestedZip(store *Store, handle ChildHandle) error {
 	switch {
 	case err != nil:
 		return fmt.Errorf("cannot compose ZIP inside S3 ZIP: %v", err)
+	default:
+	}
+	table, err := findResourceHandle(store, inner, "table.tsv", "tsv")
+	switch {
+	case err != nil:
+		return err
+	default:
+	}
+	switch err := checkTSVComposition(store, table); {
+	case err != nil:
+		return fmt.Errorf("cannot compose TSV inside nested S3 ZIP: %v", err)
 	default:
 	}
 	leaf, err := findResourceHandle(store, inner, "deep.txt", "text")

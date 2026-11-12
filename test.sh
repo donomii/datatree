@@ -125,10 +125,19 @@ alpha,2' 'rows: 1'
 
 echo ""
 echo "=== Testing browser upload controls ==="
-if grep -q 'id="upload-file"' web/index.html && grep -q "fetch('/api/upload'" web/index.html && grep -q "fetch('/api/load'" web/index.html && grep -q "fetch('/api/upload-settings'" web/index.html && grep -q "fetch('/api/unload'" web/index.html && grep -q "fetch('/api/github/action'" web/index.html && grep -q "fetch('/api/aws/action'" web/index.html && grep -q 'createAWSActionControl' web/index.html && grep -q 'RFC 6902 JSON patch' web/index.html && grep -q 'IP permissions JSON' web/index.html && grep -q 'Versioning state' web/index.html && grep -q 'aws-action-ec2-terminate' web/index.html && grep -q 'aws-action-iam-policy-version' web/index.html && grep -q "'hardware', 'usb'" web/index.html && grep -q 'Expand this node and every expandable descendant' web/index.html && grep -q 'setExpansionState' web/index.html && grep -q "isOpen ? '▾' : '▸'" web/index.html && grep -q 'expandRenderedResources' web/index.html && grep -q 'kind-diff-add' web/index.html && grep -q 'kind-diff-delete' web/index.html && grep -q 'actionExplanation' web/index.html && grep -q 'window.confirm' web/index.html && grep -q 'encodeBookmarkPath' web/index.html && grep -q 'restoreBookmarkedPath' web/index.html && grep -q 'navigator.clipboard.writeText' web/index.html && grep -q "window.location.protocol === 'file:'" web/index.html && grep -q 'cannot run directly from this HTML file' web/index.html; then
-    echo "OK: browser rejects direct file use, shows expansion state, includes local hardware and USB trees, explains controls, recursively expands subtrees, styles diffs, executes GitHub and AWS service actions, and restores bookmark fragments"
+if grep -q 'id="upload-file"' web/index.html && grep -q "fetch('/api/upload'" web/index.html && grep -q "fetch('/api/load'" web/index.html && grep -q "fetch('/api/upload-settings'" web/index.html && grep -q "fetch('/api/unload'" web/index.html && grep -q "fetch('/api/openURL'" web/index.html && grep -q 'id="url-input"' web/index.html && grep -q 'src="/static/url_nav.js"' web/index.html && grep -q 'openS3InTree' web/url_nav.js && grep -q 'src="/static/bookmarks.js"' web/index.html && grep -q "fetch('/api/bookmarks'" web/bookmarks.js && grep -q "fetch('/api/recents'" web/bookmarks.js && grep -q 'id="speedsearch-input"' web/index.html && grep -q 'src="/static/speedsearch.js"' web/index.html && grep -q "fetch('/api/search'" web/speedsearch.js && grep -q "fetch('/api/github/action'" web/index.html && grep -q "fetch('/api/aws/action'" web/index.html && grep -q 'createAWSActionControl' web/index.html && grep -q 'RFC 6902 JSON patch' web/index.html && grep -q 'IP permissions JSON' web/index.html && grep -q 'Versioning state' web/index.html && grep -q 'aws-action-ec2-terminate' web/index.html && grep -q 'aws-action-iam-policy-version' web/index.html && grep -q "'hardware', 'usb'" web/index.html && grep -q 'Expand this node and every expandable descendant' web/index.html && grep -q 'setExpansionState' web/index.html && grep -q "isOpen ? '▾' : '▸'" web/index.html && grep -q 'expandRenderedResources' web/index.html && grep -q 'kind-diff-add' web/index.html && grep -q 'kind-diff-delete' web/index.html && grep -q 'actionExplanation' web/index.html && grep -q 'window.confirm' web/index.html && grep -q 'encodeBookmarkPath' web/index.html && grep -q 'restoreBookmarkedPath' web/index.html && grep -q 'navigator.clipboard.writeText' web/index.html && grep -q "window.location.protocol === 'file:'" web/index.html && grep -q 'cannot run directly from this HTML file' web/index.html; then
+    echo "OK: browser rejects direct file use, shows expansion state, includes Open URL and Speedsearch controls, local hardware and USB trees, explains controls, recursively expands subtrees, styles diffs, executes GitHub and AWS service actions, and restores bookmark fragments"
 else
     echo "FAIL: browser upload controls do not call upload settings, upload, load, and unload APIs"
+    exit 1
+fi
+
+echo ""
+echo "=== Verifying macOS bundle build scripts ==="
+if [ -x build-macos-app.sh ] && [ -x build-macos-app.xsh ]; then
+    echo "OK: build-macos-app.sh and build-macos-app.xsh are executable"
+else
+    echo "FAIL: build-macos-app.sh or build-macos-app.xsh missing or not executable"
     exit 1
 fi
 

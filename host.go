@@ -13,6 +13,7 @@ import (
 	"mime"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -40,6 +41,8 @@ import (
 	rootdriver "datahumper/drivers_go/root_driver"
 	systemprofilerdriver "datahumper/drivers_go/system_profiler_driver"
 	textdriver "datahumper/drivers_go/text_driver"
+	tsvdriver "datahumper/drivers_go/tsv_driver"
+	urldriver "datahumper/drivers_go/url_driver"
 	zipdriver "datahumper/drivers_go/zip_driver"
 )
 
@@ -48,9 +51,9 @@ const defaultAddr = "127.0.0.1:0"
 //go:embed web/index.html
 var webIndex []byte
 
-var driverNames = []string{"root_driver", "directory_driver", "git_driver", "github_driver", "aws_driver", "system_profiler_driver", "diff_driver", "zip_driver", "text_driver", "kubernetes_driver", "json_driver", "k8s_pod_driver", "k8s_workload_driver", "k8s_service_driver", "k8s_configmap_driver", "k8s_node_driver", "image_driver", "pdf_driver", "html_driver", "csv_driver"}
+var driverNames = extendedFilterNames([]string{"root_driver", "directory_driver", "git_driver", "github_driver", "aws_driver", "system_profiler_driver", "url_driver", "diff_driver", "zip_driver", "text_driver", "kubernetes_driver", "json_driver", "k8s_pod_driver", "k8s_workload_driver", "k8s_service_driver", "k8s_configmap_driver", "k8s_node_driver", "image_driver", "pdf_driver", "html_driver", "csv_driver", "tsv_driver"})
 
-var uploadDriverNames = []string{"diff_driver", "zip_driver", "text_driver", "json_driver", "image_driver", "pdf_driver", "html_driver", "csv_driver"}
+var uploadDriverNames = extendedFilterNames([]string{"diff_driver", "zip_driver", "text_driver", "json_driver", "image_driver", "pdf_driver", "html_driver", "csv_driver", "tsv_driver"})
 
 // defaultIdleTimeout is how long a driver session may go without serving a
 // request before the idle sweep stops it. DATATREE_IDLE_TIMEOUT overrides it.
@@ -98,7 +101,10 @@ type DriverMsg struct {
 }
 
 type ListResponse struct {
-	Resources []Resource `json:"resources"`
+	Resources     []Resource `json:"resources"`
+	RootURL       string     `json:"root_url,omitempty"`
+	RootDirectory string     `json:"root_directory,omitempty"`
+	HomeDirectory string     `json:"home_directory,omitempty"`
 }
 
 type UploadResponse struct {
@@ -241,6 +247,8 @@ type Store struct {
 	handles map[string]ChildHandle
 
 	rootDirectory string
+	rootURL       string
+	savedState    *SavedStateStore
 
 	// driver processes by name
 	drivers map[string]*driverProc
@@ -301,6 +309,25 @@ func resolveRootDirectory(args []string) (string, error) {
 		requestedDirectory = args[0]
 	default:
 		return "", fmt.Errorf("cannot select the directory to open: expected zero or one directory argument, got %d arguments: %q", len(args), args)
+	}
+	trimmed := strings.TrimSpace(requestedDirectory)
+	lower := strings.ToLower(trimmed)
+	if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") {
+		parsedURL, err := urldriver.ValidateURL(trimmed)
+		if err != nil {
+			return "", err
+		} else {
+			return parsedURL.String(), nil
+		}
+	} else if strings.HasPrefix(lower, "file://") {
+		parsedFileURL, err := url.Parse(trimmed)
+		if err != nil || parsedFileURL.Path == "" {
+			return "", fmt.Errorf("cannot open file URL %q: expected a local directory file:// URL, got error: %v", requestedDirectory, err)
+		} else {
+			requestedDirectory = parsedFileURL.Path
+		}
+	} else {
+		// Resolve local directory path below.
 	}
 	absoluteDirectory, err := filepath.Abs(requestedDirectory)
 	switch {
@@ -946,7 +973,9 @@ func driverForKind(kind string) (string, bool) {
 		return "k8s_configmap_driver", true
 	case "k8s-node":
 		return "k8s_node_driver", true
-	case "url", "error", "kv", "raw":
+	case "url":
+		return "url_driver", true
+	case "error", "kv", "raw":
 		return "", false
 	case "image":
 		return "image_driver", true
@@ -956,10 +985,14 @@ func driverForKind(kind string) (string, bool) {
 		return "html_driver", true
 	case "csv":
 		return "csv_driver", true
-	case "text", "file":
+	case "tsv":
+		return "tsv_driver", true
+	case "text":
 		return "text_driver", true
+	case "file":
+		return "auto_driver", true
 	default:
-		return "text_driver", true
+		return additionalDriverForKind(kind)
 	}
 }
 
@@ -1021,8 +1054,12 @@ func runEmbeddedDriver(driverName string, args []string) {
 		htmldriver.Run()
 	case "csv_driver":
 		csvdriver.Run()
+	case "tsv_driver":
+		tsvdriver.Run()
+	case "url_driver":
+		urldriver.Run()
 	default:
-		logUnknownEmbeddedDriver(driverName)
+		runAdditionalFilter(driverName)
 	}
 }
 
@@ -1060,7 +1097,7 @@ func main() {
 	default:
 	}
 
-	rootDirectory, err := resolveRootDirectory(os.Args[1:])
+	rootDirectory, rootURL, err := resolveRootTarget(filterCLIArgs(os.Args[1:]))
 	switch {
 	case err != nil:
 		logRootDirectoryFailure(err)
@@ -1073,6 +1110,21 @@ func main() {
 	default:
 	}
 	store.rootDirectory = rootDirectory
+	store.rootURL = rootURL
+	savedStore, savedErr := openSavedStateStore()
+	switch {
+	case savedErr != nil:
+		log.Printf("Saved bookmarks and recents disabled: %v", savedErr)
+	default:
+		store.savedState = savedStore
+		if rootURL != "" {
+			_, _ = savedStore.recordRecent(SavedEntryRequest{Label: rootURL, URL: rootURL})
+		} else if rootDirectory != "" {
+			_, _ = savedStore.recordRecent(SavedEntryRequest{Label: rootDirectory, URL: "file://" + rootDirectory, Kind: "directory"})
+		} else {
+			// Default location-browser launch adds no recent entry automatically.
+		}
+	}
 	logRootDirectory(rootDirectory)
 
 	// Auto-load root driver on startup
@@ -1125,6 +1177,11 @@ func main() {
 
 	mux := http.NewServeMux()
 	mountFoldControl(mux)
+	mountSearch(mux, store)
+	mountURLNav(mux)
+	mountBookmarks(mux, store.savedState)
+	mountFilterCatalog(mux)
+	mux.HandleFunc("/api/openURL", openURLHandler(store))
 
 	// static
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -1211,9 +1268,21 @@ func main() {
 	mux.HandleFunc("/api/list", func(w http.ResponseWriter, r *http.Request) {
 		store.mu.RLock()
 		resources := store.rootResources
+		rootURL := store.rootURL
+		rootDir := ""
+		if urldriver.IsHTTPURL(store.rootDirectory) {
+			if rootURL == "" {
+				rootURL = store.rootDirectory
+			} else {
+				// Keep explicitly resolved root URL.
+			}
+		} else {
+			rootDir = store.rootDirectory
+		}
 		store.mu.RUnlock()
+		homeDir, _ := os.UserHomeDir()
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(ListResponse{Resources: resources})
+		_ = json.NewEncoder(w).Encode(ListResponse{Resources: resources, RootURL: rootURL, RootDirectory: rootDir, HomeDirectory: homeDir})
 	})
 
 	// auto-load appropriate driver for a handle
@@ -1313,21 +1382,33 @@ func main() {
 	mux.HandleFunc("/api/github/action", githubActionHandler(store))
 	mux.HandleFunc("/api/aws/action", awsActionHandler(store))
 
-	// data (download bytes via handle)
+	// data (download bytes via handle or uploaded/fetched res_id)
 	mux.HandleFunc("/api/data", func(w http.ResponseWriter, r *http.Request) {
 		hid := r.URL.Query().Get("handle")
+		resID := r.URL.Query().Get("res_id")
 		off := parseI64(r.URL.Query().Get("offset"), 0)
 		length := parseI64(r.URL.Query().Get("length"), -1)
 
-		h, recoveryErr := store.resolveHandle(hid)
-		if recoveryErr != nil {
-			http.Error(w, recoveryErr.Error(), 404)
-			return
-		}
-		chunk, err := store.serveChildRange(h, off, length)
-		if err != nil {
-			http.Error(w, err.Error(), 500)
-			return
+		var chunk []byte
+		if hid == "" && resID != "" {
+			if _, ok := store.getBlob(resID); !ok {
+				http.Error(w, fmt.Sprintf("cannot read data: unknown or expired resource id %q", resID), 404)
+				return
+			} else {
+				chunk = store.serveBlobRange(resID, off, length)
+			}
+		} else {
+			h, recoveryErr := store.resolveHandle(hid)
+			if recoveryErr != nil {
+				http.Error(w, recoveryErr.Error(), 404)
+				return
+			}
+			var err error
+			chunk, err = store.serveChildRange(h, off, length)
+			if err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
 		}
 		w.Header().Set("Content-Type", "application/octet-stream")
 		w.Header().Set("Content-Length", strconv.Itoa(len(chunk)))

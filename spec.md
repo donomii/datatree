@@ -4,6 +4,8 @@ Standalone repository: https://github.com/donomii/datatree.
 
 Content browsing update:
 
+The byte-filter catalog and complete additional format behavior are specified in FORMATS.md, which is part of this specification. There are 38 selectable byte filters, including 29 additional readers/helpers. The same catalog determines filename classification, embedded driver availability, upload choices, resource filters and gallery expansion. Every additional filter follows the original-byte contract and works at arbitrary provider/filter depth. Existing XSH launchers build the additional pure-Go readers and embedded SQLite runtime into the application; no external decompression, document or database tools are required.
+
 The directory browser has a floating Fold up button at the lower right while an expanded branch is visible. Its label names the detected branch; its tooltip explains that only that branch closes. Scrolling, resizing and tree changes update the target automatically: choose the deepest expanded branch crossing a reading line 30 percent down the viewport, capped at 160 pixels, or the nearest visible expanded branch if none crosses it. The target is checked again when clicked. Folding closes only that branch's descendants, updates its arrow, scrolls its owning row into view and returns keyboard focus to that row's expander when available. Ancestors and sibling branches remain open. No target means the button is hidden. This applies to selected filters and nested local/network resources as well as uploaded trees. Uploaded roots can fold without releasing the upload or its retained view; their row arrow reopens them. Closing an upload still releases it. Pending reads cannot re-open a branch the user folded, and removed media previews release their blob URLs. The helper script is embedded and served as JavaScript at GET /static/fold.js.
 
 Restart recovery: server-issued handles for resources rooted in the filesystem/location browser contain an authenticated, encrypted reconstruction route. The route records version 1, the original root directory, and each selected driver, display name, internal child key and kind. It contains no cached file bytes or provider credentials. A private 32-byte AES-GCM key is created once at the operating system user configuration directory under datatree/recovery.key (on macOS: HOME/Library/Application Support/datatree/recovery.key), with file permission 0600 and a private datatree directory. Invalid, public, non-regular or malformed key files are rejected instead of replaced. Handle tokens begin hdl-v1.; fresh non-recoverable upload and resource IDs use random UUIDs, so restart cannot accidentally map an old ID to a different resource.
@@ -16,7 +18,7 @@ Recreated provider processes reuse the configured CLI accounts and credential st
 
 The default dynamic loopback listener remembers its selected address in datatree/listener beside the recovery key. A normal restart tries that same port, preserving the browser origin. If that port is occupied it selects and saves another available local port and prints/opens the new URL; explicitly configured fixed addresses remain authoritative. Malformed saved listener data is rejected. Tests use private temporary recovery keys, fake provider CLIs and real driver subprocesses to recover S3-to-ZIP-to-ZIP-to-text after constructing a completely new router and loading its key from disk, and again after idle-driver removal. Additional tests cover token tampering, changed keys, invalid state preservation, origin reuse, occupied ports and authentication renewal/retry.
 
-All-driver byte contract: every byte filter (ZIP, text, JSON, CSV, HTML, PDF, image, diff, and the five Kubernetes presenters) retains its exact complete input in a readable [source bytes] child of kind raw. That child offers download and explicit filter selection, but does not auto-expand, so recursive expansion cannot create a cycle. Rejected input remains available beside the visible format error. Presenter values and extracted URLs retain their actual value bytes under unique internal keys, rather than bytes reconstructed from labels. The shared Resource record has an implementation-only optional byte payload, never serialized; the harness binds it to the ordinary range-serving map and advertises readable. Navigation and action descriptors remain separate from file or document bytes.
+All-driver byte contract: every byte filter (ZIP, text, JSON, CSV, TSV, HTML, PDF, image, diff, and the five Kubernetes presenters) retains its exact complete input in a readable [source bytes] child of kind raw. That child offers download and explicit filter selection, but does not auto-expand, so recursive expansion cannot create a cycle. Rejected input remains available beside the visible format error. Presenter values and extracted URLs retain their actual value bytes under unique internal keys, rather than bytes reconstructed from labels. The shared Resource record has an implementation-only optional byte payload, never serialized; the harness binds it to the ordinary range-serving map and advertises readable. Navigation and action descriptors remain separate from file or document bytes.
 
 Directory/root files, Git HEAD/index/worktree blobs, S3 objects, Kubernetes manifests and ConfigMap/Secret entries all serve actual payloads through the same range protocol. Git file bytes are independent of the metadata output-size limit and failures use the protocol error field rather than text substituted for file data. ConfigMap and decoded Secret keys use the same filename-based classification as disk files, including ZIP, with UTF-8 fallback for unknown filenames. Hardware/USB data-node handles serve actual JSON; their default presenter accepts those bytes, and JSON or other filters can mount on the same handle. Hardware views retain complete source JSON and scalar bytes. Provider query views expose original command-result bytes alongside their navigation rows, including GitHub responses, AWS service responses and Kubernetes listings.
 
@@ -24,7 +26,7 @@ Range responses contain base64 data, an integer size matching the decoded byte c
 
 The no-argument XSH launchers build.xsh, run.xsh, test.xsh, demo.xsh and install.xsh work from any directory. run.xsh builds and opens the location browser. test.xsh runs all Go tests and the executable's -test self-test. install.xsh installs to HOME/.local/bin/datatree. Existing shell scripts remain as legacy launchers.
 
-Opening an S3 bucket in the service catalog, Resource Explorer, or Cloud Control view lists objects as ordinary files with original names, actual sizes and the same extension-based kinds as disk files. Their handles lazily serve actual bytes through the normal range protocol, never AWS mount-state JSON. ZIP, JSON, text, CSV and other filters mount directly on those handles, without an intermediate AWS object wrapper. Prefixes remain AWS browsing views. Numbered internal keys distinguish reserved controls and duplicate labels. The first bucket page retains actions, and listings preserve the 1000-object continuation view. Permission and validation failures are visible errors.
+Opening an S3 bucket in the service catalog, Resource Explorer, or Cloud Control view lists objects as ordinary files with original names, actual sizes and the same extension-based kinds as disk files. Their handles lazily serve actual bytes through the normal range protocol, never AWS mount-state JSON. ZIP, JSON, text, CSV, TSV and other filters mount directly on those handles, without an intermediate AWS object wrapper. Prefixes remain AWS browsing views. Numbered internal keys distinguish reserved controls and duplicate labels. The first bucket page retains actions, and listings preserve the 1000-object continuation view. Permission and validation failures are visible errors.
 
 S3 provider states carry opaque UTF-8 keys up to 1024 bytes and pagination tokens up to 8192 bytes. Object descriptors require a key and no token; only the provider resolves these descriptors. No key is interpreted as a local path or shell command. Only exact read-only list-objects-v2 and remote-object-to-stdout copy commands are permitted; uploads, recursive copies, local destinations and arbitrary flags are rejected. DATATREE_AWS_MAX_OUTPUT_BYTES (default 8388608) bounds metadata and stderr, not object bytes. Finite range responses retain only requested bytes while draining the CLI stream; whole-document filters receive all bytes. Whole-document processing remains subject to available memory, as it is for disk files.
 
@@ -36,7 +38,9 @@ SQS message reception changes visibility, so queues explicitly explain why read-
 
 Every byte-backed child offers an explained Filter selector and Apply filter button, defaulting to its ordinary kind (ZIP for archives, text for unknown files). The selected filter interprets the same bytes regardless of provider, extension or nesting depth, replacing that resource's current child view. Its children can be filtered again. JSON scalar leaves preserve exact serialized bytes, advertise readable=true in the driver and HTTP Resource records, and offer downloads and filter controls. Metadata without byte payloads has no filter selector. ZIP entries use unique internal keys, preserving duplicate names independently. Corrupt archives and unreadable entries produce visible errors rather than silently empty listings.
 
-Text, HTML source, binary, JSON and CSV content has 64 KiB byte pages with Previous bytes and Next bytes controls and a zero-based range readout. All bytes can be reached without an 8 MiB preview cutoff. UTF-8 text uses text nodes without script execution; binary and split UTF-8 byte pages show exact hexadecimal bytes. Images and PDFs use complete bytes and local blob URLs revoked on collapse or upload close. Upload-root previews read the selected File; descendants use the same handle protocol as disk and S3 files. The executable self-test exercises real subprocess composition through S3 ZIP, nested ZIP, text, twelve additional ZIP layers, an extensionless ZIP, JSON scalar bytes, empty files, and a 9,000,000-byte object using only a fake AWS CLI.
+Text, HTML source, binary, JSON, CSV and TSV content has 64 KiB byte pages with Previous bytes and Next bytes controls and a zero-based range readout. All bytes can be reached without an 8 MiB preview cutoff. UTF-8 text uses text nodes without script execution; binary and split UTF-8 byte pages show exact hexadecimal bytes. Images and PDFs use complete bytes and local blob URLs revoked on collapse or upload close. Upload-root previews read the selected File; descendants use the same handle protocol as disk and S3 files. The executable self-test exercises real subprocess composition through S3 ZIP, nested ZIP, text, twelve additional ZIP layers, an extensionless ZIP, JSON scalar bytes, empty files, and a 9,000,000-byte object using only a fake AWS CLI.
+
+URL browsing and macOS application support: Datatree accepts an s3://, k8s://, file://, http://, or https:// URL (as well as a local file or directory path, ignoring macOS LaunchServices -psn_* arguments) on the command line or in the browser's Open URL bar. Tree-navigable URLs (s3://bucket/path/to/file with optional profile@ or ?profile=&region=, k8s://context/namespace/type/object, and file:///path/to/file) expand the live tree branch-by-branch right down to the target node, scroll it into view, highlight it, and open its leaf/container view via web/url_nav.js (GET /static/url_nav.js). HTTP/HTTPS URLs entered in the Open URL bar call POST /api/openURL, while url resources extracted inside documents or opened at HTTP root expand through url_driver, which fetches HTTP/HTTPS URLs read-only up to DATATREE_MAX_URL_BYTES (falling back to DATATREE_MAX_UPLOAD_BYTES, default 64 MiB) within DATATREE_URL_TIMEOUT (default 30s), exposes url, status, content-type, and size metadata leaves plus a classified body child, and excludes url children from parent recursive expansion (⇲) so external hosts are not crawled automatically. Speedsearch (web/speedsearch.js and POST /api/search) filters all items—including visible rows, previously collapsed branches cached by web/fold.js, and unopened directory and safe container branches searched server-side—within bounded depth, node, container, and time limits. build-macos-app.sh and build-macos-app.xsh package a self-contained ad-hoc signed Datatree.app bundle with a Cocoa launcher (Datatree) accepting folder drops and datatree://, s3://, k8s://, http://, https:// open-URL events, the embedded Go binary (datatree-bin), generated AppIcon.icns, and Info.plist.
 
 1. Summary
 
@@ -67,9 +71,9 @@ brew install --cask datatree
 
 The tap cask downloads a checksummed archive containing the arm64 macOS Datatree executable and links it into Homebrew's binary directory. The release executable is built locally from the Datatree project directory with CGO disabled and tested before packaging. The cask does not invoke Homebrew's source-build environment, so installation does not require current Apple Command Line Tools. The executable is not signed or notarized. The cask explicitly removes the macOS quarantine attribute from the checksummed Datatree executable after installation so Gatekeeper does not block it. Updating the cask requires a new immutable versioned binary archive and matching SHA-256 checksum.
 
-The user runs ./run.sh with an optional directory argument.
+The user runs ./run.sh (or launches Datatree.app on macOS) with an optional directory path, file path, or s3://, k8s://, file://, http://, or https:// URL argument.
 
-The script compiles one ./datatree executable containing the host, drivers, and browser UI, then starts it on the saved loopback port when available, or an available local port selected by the operating system. When a directory argument is present, Datatree opens that directory. Without a directory argument, Datatree opens a location browser containing HOME, /, and readable mounted-volume directories it can discover. Relative directory arguments are resolved from the directory where the user invoked the command. A missing path, non-directory path, or more than one argument stops startup with a complete error. After binding the listening socket, the host prints the complete browser URL, including the selected port, and opens that URL in the default macOS browser.
+The script compiles one ./datatree executable containing the host, drivers, and browser UI, then starts it on the saved loopback port when available, or an available local port selected by the operating system. When a directory path or file:// directory URL is present, Datatree opens that directory directly. When a file:// file path, plain file path, s3://..., or k8s://... target is present, Datatree opens the containing directory (or location browser for s3:// and k8s://) and records root_url in GET /api/list so the browser automatically expands the tree down to that exact point on load. When an http:// or https:// URL is present, Datatree records that root URL so root_driver exposes it at the root listing and the browser automatically opens and expands it on load. Without an argument, Datatree opens a location browser containing HOME, /, and readable mounted-volume directories it can discover. Relative directory arguments are resolved from the directory where the user invoked the command; macOS LaunchServices -psn_* arguments are ignored. A missing path, invalid URL, or more than one argument stops startup with a complete error. After binding the listening socket, the host prints the complete browser URL, including the selected port, and opens that URL in the default macOS browser. To build the native macOS bundle, run ./build-macos-app.sh or xsh build-macos-app.xsh, which produces Datatree.app ready to launch via open Datatree.app or open Datatree.app <path-or-url>.
 
 The user opens the printed http://127.0.0.1:PORT URL in a browser. Opening web/index.html directly with a file URL cannot reach the HTTP API; in that mode the page disables its controls and displays instructions to start Datatree with ./run.sh and use the printed HTTP URL.
 
@@ -81,7 +85,7 @@ When listening on a loopback address, the host accepts requests addressed to tha
 
 Run ./run-gallery.sh from the directory to browse, or supply a directory argument, to open the 3D exhibit on this Mac. The launcher builds the host, forces a dynamic loopback port, and sets DATATREE_GALLERY_ASSETS to the trusted portfolio source directory. An empty DATATREE_GALLERY_ASSETS disables the exhibit in a regular launch. A configured exhibit requires an explicit browse directory and a loopback listener. The host serves the embedded exhibit and three named assets from the configured directory on the API origin.
 
-The exhibit starts with the sample archive. Browse live Datatree fetches the root listing from the host. Select a plaque or its matching button to expand a directory, ZIP, JSON, text, image, PDF, HTML, or CSV resource using its opaque handle. Other resources show their kind and size and action rows are omitted. The exhibit keeps the current view on request failure and shows the error. Up and the page controls navigate the tree, and Restore sample returns to the bundled archive. Local ZIP and snapshot imports stay in browser memory.
+The exhibit starts with the sample archive. Browse live Datatree fetches the root listing from the host. Select a plaque or its matching button to expand a directory, ZIP, JSON, text, image, PDF, HTML, CSV, or TSV resource using its opaque handle. Other resources show their kind and size and action rows are omitted. The exhibit keeps the current view on request failure and shows the error. Up and the page controls navigate the tree, and Restore sample returns to the bundled archive. Local ZIP and snapshot imports stay in browser memory.
 
 Point a VR controller at **Live Datatree** and select it to browse the host's directory from inside the exhibit. The plaque changes to **Sample archive** when browsing live or imported data. Select it to return to the bundled archive. The exhibit displays progress and errors for live requests and branch opening on a 3D plaque as well as on the page. Another navigation action supersedes an in-flight request.
 
@@ -137,11 +141,13 @@ If an expanded resource has no child resources, the browser displays "No child r
 
 If expansion fails, the browser displays a row-level error message containing the failed resource name and the server response.
 
-The browser treats url, kv, and error resources as leaves. They are displayed but not expanded and not downloaded. A kv resource's name carries a "key: value" fact from a curated view, and an error resource's name carries a complete failure message, so a kubectl or cluster failure is readable directly in the tree. Expandable container kinds (directory, kubernetes, and the k8s object kinds) show no download link; json resources show both an expand button and a download link for their raw bytes.
+The browser treats kv and error resources as leaves. They are displayed but not expanded and not downloaded. Rows of kind url show a link icon and offer an Expand/Collapse button that mounts url_driver on the URL string bytes (either to inspect metadata and the fetched resource in-place, or via Open URL at root), while recursive expansion (⇲) skips url children so expanding a document or folder never automatically fetches external websites. A kv resource's name carries a "key: value" fact from a curated view, and an error resource's name carries a complete failure message, so a kubectl or cluster failure is readable directly in the tree. Expandable container kinds (directory, kubernetes, and the k8s object kinds) show no download link; json resources show both an expand button and a download link for their raw bytes.
+
+Above the tree, an Open URL bar lets the user type or paste an s3://, k8s://, file://, http://, or https:// URL (or a local /path), optionally pick a byte filter (defaulting to Auto-detect), click Open URL, or click ☆ Bookmark to save it as a persistent bookmark. For s3://bucket/path/to/file, k8s://context/namespace/type/object, or file:///path/to/file, web/url_nav.js clears any active Speedsearch filter, walks and expands the matching live tree hierarchy (including AWS profile/region/Service Catalog/S3 buckets, `[next page]` pagination, directories, and nested archives when remaining path segments cross a container), scrolls the destination row into view, highlights it, and expands/previews it when expandable. For http:// or https:// URLs, the browser calls POST /api/openURL to fetch and browse that URL at the top of the tree without restarting the server. A Speedsearch filter bar below allows typing space-separated search terms: matching is case-insensitive across all terms on both resource name and kind. Matching filters visible rows immediately (including the top-level `recents` and `bookmarks` branches), reveals matches inside previously folded/collapsed branches cached by web/fold.js, and queries POST /api/search for matching items inside unopened local directories and safe containers (ZIP, JSON, YAML, and other embedded byte filters, excluding network/hardware CLI providers and URLs), rendering interactive search results whose rows can be previewed, expanded, downloaded, or scrolled to in the tree. Clearing the search restores the normal folded/expanded tree view. At the top of the tree view, collapsible `recents` and `bookmarks` branches display recently opened/expanded URLs and tree locations (up to 50 deduplicated items, with a Clear recents control and one-click `☆`/`★` bookmark toggle buttons alongside each expandable tree row) and saved bookmarks (up to 200 items stored atomically in DATATREE_CONFIG_DIR or OS UserConfigDir/datatree as bookmarks.json and recents.json), allowing one-click reopening straight to the saved point in the tree.
 
 Rows of kind kubernetes offer an expand button but no download link, matching the treatment of directories.
 
-Rows of kind git use a branch icon, offer expand and recursive-expand buttons, and have no download link. A directory containing a .git directory or file is shown as kind git. When the selected directory is inside a Git work tree, the root listing begins with a virtual . row of kind git for opening the current repository view directly. Expanding it shows the repository path, current branch, HEAD commit or unborn state, active Git limits, and expandable sections for commits, files committed at HEAD, all uncommitted changes, staged changes, unstaged changes, untracked files, and conflicted files. The all-uncommitted section labels every row with all applicable states; the specific state section heading supplies its context, so its child rows say added, modified, deleted, type changed, untracked, or the complete conflict status without repeating the section name. File rows retain their normal text, JSON, image, PDF, HTML, CSV, archive, or file kind, so their selected Git version can be previewed or downloaded through the existing controls. Deleted files and submodule entries are informational leaves because they have no ordinary file bytes at that view.
+Rows of kind git use a branch icon, offer expand and recursive-expand buttons, and have no download link. A directory containing a .git directory or file is shown as kind git. When the selected directory is inside a Git work tree, the root listing begins with a virtual . row of kind git for opening the current repository view directly. Expanding it shows the repository path, current branch, HEAD commit or unborn state, active Git limits, and expandable sections for commits, files committed at HEAD, all uncommitted changes, staged changes, unstaged changes, untracked files, and conflicted files. The all-uncommitted section labels every row with all applicable states; the specific state section heading supplies its context, so its child rows say added, modified, deleted, type changed, untracked, or the complete conflict status without repeating the section name. File rows retain their normal text, JSON, image, PDF, HTML, CSV, TSV, archive, or file kind, so their selected Git version can be previewed or downloaded through the existing controls. Deleted files and submodule entries are informational leaves because they have no ordinary file bytes at that view.
 
 Rows of kind github offer expand and recursive-expand buttons and have no download link. GitHub scalar details are kv leaves; nested arrays and objects use json rows and therefore continue through json_driver to arbitrary depth. A changed file in [diff] has kind diff, offers expand and recursive-expand buttons, and has no download link. Its diff-meta, diff-hunk, diff-context, diff-delete, and diff-add children are non-expandable leaves with no download links. Added rows use a green background, removed rows use a red background, hunk headings use a blue background, metadata uses a neutral grey background, and context rows preserve the ordinary code background. Diff code preserves spacing and wraps when required by the available width.
 
@@ -159,7 +165,7 @@ The host asks the driver that owns the handle to serve the requested child range
 
 2.4 Browser and HTTP upload workflow
 
-Above the home-directory tree, the browser shows a file chooser labelled "Choose a file to inspect", a driver selector labelled "Preview using", an "Upload and preview" button, a status readout, and the active per-file, total retained-memory, and idle-expiry limits. The file chooser selects one local file; the original file is never changed. The driver selector lists the upload-compatible drivers returned by GET /api/drivers and initially selects zip_driver. Internal drivers that require a mount state or filesystem path are not offered. The user selects the driver that understands the chosen file type. Hovering the limits readout explains that inactive uploads may be evicted and that closing a preview releases its retained data.
+Above the home-directory tree, the browser shows a file chooser labelled "Choose a file to inspect", a driver selector labelled "Preview using", an "Upload and preview" button, a status readout, and the active per-file, total retained-memory, and idle-expiry limits. The file chooser selects one local file; the original file is never changed. The driver selector lists byte-filter kinds and help from GET /api/formats and initially selects AUTO. Automatic upload selection uses the filename when recognized, otherwise the byte detector. Internal drivers that require a mount state or filesystem path are not offered. The user can explicitly select another filter. Hovering the limits readout explains that inactive uploads may be evicted and that closing a preview releases its retained data.
 
 Clicking "Upload and preview" with no file or no driver displays an explanation beside the controls. With both selected, the browser posts the file bytes to /api/upload, posts the returned resource id and selected driver to /api/load, and displays the resulting resources in a new tree above earlier upload results. Each uploaded tree supports the same expand and download controls as the home-directory tree and has a "Close FILE" button. Closing a preview stops its driver session, removes the session's child handles, releases its uploaded bytes immediately, removes its tree, and reports the release in the status readout. The status readout otherwise reports upload progress, driver loading, the resulting driver session, or the complete server error.
 
@@ -441,9 +447,11 @@ html maps to html_driver.
 
 csv maps to csv_driver.
 
-text and file map to text_driver.
+tsv maps to tsv_driver.
 
-url, kv, and error are leaf kinds and do not map to another driver.
+text maps to text_driver. file maps to auto_driver, which exposes a detected document or readable raw bytes. Additional kinds map to the driver with the matching kind in /api/formats.
+
+url maps to url_driver. kv and error are leaf kinds and do not map to another driver.
 
 Unknown kinds map to text_driver.
 
@@ -451,7 +459,7 @@ Unknown kinds map to text_driver.
 
 6.1 root_driver
 
-root_driver reads the directory supplied by the host. When started without a directory argument, it emits a filesystem location browser instead of reading the current working directory.
+root_driver reads the directory or http:// / https:// URL supplied by the host. When started without an argument, it emits a filesystem location browser instead of reading the current working directory. When started with an http:// or https:// URL argument, it emits that URL as an expandable url resource at the top of the root listing using a reserved opaque key and serves the URL string bytes on range requests.
 
 The location browser always emits HOME and / as directory resources. HOME serves the absolute home-directory path and / serves the filesystem-root path. root_driver also checks /Volumes, /mnt, and /media. Every readable, non-hidden directory immediately below one of those roots becomes a directory resource. Entries below /Volumes are named VOLUME: NAME. Entries below /mnt and /media are named MOUNT: ABSOLUTE_PATH. Missing roots, unreadable entries, hidden entries, non-directories, and duplicate paths are ignored. Expanding any location serves its exact absolute path to directory_driver.
 
@@ -467,7 +475,7 @@ Files are classified by extension:
 
 .txt, .md, .log -> text.
 
-.zip, .tar, .gz -> archive.
+.zip and ZIP-based Office/OpenDocument/ebook/application packages -> archive. .tar -> tar. .gz and .tgz -> gzip. Other additional extensions use the catalog in FORMATS.md.
 
 .jpg, .jpeg, .png, .gif, .bmp -> image.
 
@@ -478,6 +486,8 @@ Files are classified by extension:
 .json -> json.
 
 .csv -> csv.
+
+.tsv -> tsv.
 
 Other files -> file.
 
@@ -607,6 +617,10 @@ html_driver requests all upstream bytes and emits the first page title as a kv l
 
 csv_driver requests all upstream bytes and treats the first record as column headings. It emits row and column counts, an expandable [headers] JSON child, and one expandable JSON child per data row. Empty headings receive stable "column N" names and duplicate headings receive numeric suffixes so cells are not lost. Ragged rows retain every present cell. Invalid CSV produces a complete error resource and retains the original source bytes.
 
+tsv_driver uses the same table view with tab-separated records. Files ending in .tsv (case insensitive) select it automatically. Every byte-backed resource offers it in the Filter selector, and uploads offer it in the driver selector. Expand a row to inspect its string-valued cells through JSON, then apply further filters to cell bytes as usual. Empty or duplicate headings receive unique names. Quoted tabs, quoted line breaks, doubled quotes, literal commas, empty cells and extra cells in ragged rows are retained. Missing cells are omitted rather than invented. Blank lines are ignored; rows containing only tabs retain their empty cells. Malformed quoting produces a visible TSV error. Parsed cells use standard delimited-record CRLF normalization; [source bytes] always retains exact original bytes, including rejected input. TSV uses the ordinary paged text preview and works on disk, S3, uploads and inside nested archives. The gallery accepts TSV resources for expansion. Tests exercise disk and fake S3 data through TSV, JSON rows and text cells, including TSV inside nested S3 ZIP files.
+
+ListDelimited takes document bytes, a separator character and a format name, returning resources, child payload bytes and a parse error for invalid input. CSV and TSV share this parser for heading names and row conversion.
+
 6.9 Git repository driver
 
 git_driver requests an absolute repository path during its first mount and JSON Git mount states on deeper mounts. It resolves the path with git rev-parse --show-toplevel and rejects bare repositories or paths that are not working trees. DATATREE_GIT selects the executable, defaulting to git on PATH.
@@ -662,6 +676,10 @@ system_profiler_driver requests a versioned mount state from its parent. A hardw
 A usb root first runs exactly system_profiler -listDataTypes. It prefers SPUSBHostDataType on current macOS and falls back to SPUSBDataType when that is the available legacy type, then runs exactly system_profiler TYPE -json. The returned bus array is shown in command order. Each object's _name becomes its row name. Nested _items arrays are flattened into named hub and device children, while other nested objects and arrays remain expandable. Duplicate names are suffixed [2], [3], and so on within their parent. Field names are made readable without changing their values; common hardware and USB fields have concise labels.
 
 Each expandable child carries a versioned node mount state containing only that captured JSON value. Expanding it parses those bytes and does not rerun system_profiler. Invalid mount states, invalid JSON, an invalid _items type, an unavailable USB data type, command failures, output-limit failures, and command timeouts become complete visible error rows. The command gate permits only -listDataTypes and JSON reads of SPHardwareDataType, SPUSBHostDataType, or SPUSBDataType. The executable is invoked directly without a shell, must finish within DATATREE_SYSTEM_PROFILER_TIMEOUT, never contacts a network service, and has no action kinds.
+
+6.13 URL driver
+
+url_driver reads the upstream URL string (up to 8192 bytes, rejecting empty, whitespace, NUL, or non-http/https URLs), performs a single read-only HTTP GET request with User-Agent Datatree/1.0, accepts HTTP 2xx status codes (and followed redirects resulting in 2xx), and reads at most DATATREE_MAX_URL_BYTES plus one byte (falling back to DATATREE_MAX_UPLOAD_BYTES, default 64 MiB) within DATATREE_URL_TIMEOUT (default 30s). It classifies the downloaded payload using the URL path extension, response Content-Type header, and conservative content signature detection (HTML, JSON, XML, CSV, TSV, ZIP/archive, PDF, image, text, or generic file). It emits kv metadata leaves for url, status, content-type, and size alongside the downloaded body child (preserving the fetched payload as readable bytes for downstream filters, previews, and downloads). Errors in URL syntax, network requests, non-2xx HTTP statuses, or payloads exceeding the byte limit become explicit visible error leaves or errors.
 
 7. Host Algorithms
 
@@ -727,7 +745,9 @@ Returns web/index.html.
 
 GET /api/drivers
 
-Returns a JSON array containing only drivers that can meaningfully inspect arbitrary uploaded file bytes: diff_driver, zip_driver, text_driver, json_driver, image_driver, pdf_driver, html_driver, and csv_driver. Internal root, filesystem, GitHub, AWS, Kubernetes, and system-profiler drivers are omitted because they require paths or validated mount states.
+Returns a JSON array containing all selectable byte-filter driver names from the catalog, including the existing diff, ZIP, text, JSON, image, PDF, HTML, CSV and TSV readers and the additional filters in FORMATS.md. Internal root, filesystem, GitHub, AWS, Kubernetes, and system-profiler drivers are omitted because they require paths or validated mount states.
+
+GET /api/formats returns an array of FilterInfo records: driver, kind, description, extensions and text, as defined in FORMATS.md. The browser loads this catalog before rendering resources. Uploads default to AUTO, selecting known filename suffixes first and detecting signatures otherwise. Every option includes its usage description. Selectors remain bounded in width. New resource kinds automatically become expandable in both browsers. All byte kinds receive a 64 KiB paged text/hexadecimal preview, except image and PDF kinds which keep their existing complete-media previews.
 
 GET /api/upload-settings
 
@@ -738,7 +758,55 @@ GET /api/list
 Returns:
 
 ```
-{ "resources": [ Resource, ... ] }
+{ "resources": [ Resource, ... ], "root_url": "optional initial URL", "root_directory": "optional resolved directory path", "home_directory": "optional user home path" }
+```
+
+GET /static/speedsearch.js
+
+Returns the embedded client-side Speedsearch helper JavaScript module (`web/speedsearch.js`).
+
+GET /static/url_nav.js
+
+Returns the embedded client-side URL tree-navigation helper JavaScript module (`web/url_nav.js`) for opening `s3://`, `k8s://`, and `file://` URLs directly in the live tree.
+
+GET /static/bookmarks.js
+
+Returns the embedded client-side Bookmarks and Recents helper JavaScript module (`web/bookmarks.js`).
+
+GET /api/bookmarks, POST /api/bookmarks, DELETE /api/bookmarks?id=ID, POST /api/bookmarks/delete
+
+Manage persistent bookmarks stored in bookmarks.json (`{ "entries": [ SavedEntry, ... ] }`). POST accepts `{ "label", "url", "path", "kind" }`, deduplicates by canonical URL or tree path, preserves existing ID or generates `bm-<hex>`, and retains up to 200 bookmarks.
+
+GET /api/recents, POST /api/recents, DELETE /api/recents
+
+Manage the deduplicated most-recent history stored in recents.json (`{ "entries": [ SavedEntry, ... ] }`, newest first, up to 50 items), populated automatically on CLI URL/directory startup, HTTP URL fetches, and manual row expansions.
+
+POST /api/openURL
+
+Request:
+
+```
+{ "url": "https://example.com/data.json", "driver": "optional byte-filter driver or auto_driver" }
+```
+
+Validates the http:// or https:// URL, fetches its bytes up to the configured upload/URL byte limit within DATATREE_URL_TIMEOUT, classifies the payload, selects the requested byte-filter driver (or maps the detected kind via auto-selection, falling back to text_driver when non-expandable), stores the fetched body as an upload-backed resource ID with session bookkeeping, and returns:
+
+```
+{ "res_id": "uuid", "url": "https://...", "name": "data.json", "kind": "json", "size": 123, "content_type": "application/json", "status": "200 OK", "resources": [ Resource, ... ], "driver": "json_driver", "session": "json_driver_<res_id>" }
+```
+
+POST /api/search
+
+Request:
+
+```
+{ "query": "search terms", "handles": [ "hdl-..." ], "extra_handles": [ "hdl-..." ], "max_depth": 6, "max_results": 100, "max_nodes": 3000 }
+```
+
+Performs a bounded breadth-first search (depth bounded to at most 12, results to at most 500, scanned nodes to at most 10000, container expansions to 40, and total search time to 3s) starting from the supplied root and cached/expanded handles (skipping active uploaded/expanded handles already searched on the client and excluding external network/CLI providers aws, github, kubernetes, hardware, usb, and url). Uses fast directory reads with lazy directory_driver handle materialization so matched rows remain expandable and downloadable. Returns:
+
+```
+{ "query": "search terms", "matches": [ { "path": [ { "name": "...", "kind": "...", "handle": "optional" } ], "resource": Resource } ], "scanned": 120, "truncated": false }
 ```
 
 POST /api/upload
@@ -831,9 +899,9 @@ POST /api/aws/action
 
 The request must have an Origin header exactly matching http:// plus the request Host. The JSON body is bounded to 276480 bytes and contains an opaque aws-action-* handle plus an optional body of at most 262144 bytes. The host reads the validated target from the handle. It accepts a body only as a desired-state object, JSON patch array, Region, output format, IP-permissions array, policy object, or versioning state according to the stored action kind. A successful response contains message. Malformed, unsupported, stale-handle, target-validation, configuration, and AWS CLI failures return HTTP 400.
 
-GET /api/data?handle=HID&offset=O&length=L
+GET /api/data?handle=HID&offset=O&length=L (or res_id=RID&offset=O&length=L)
 
-Returns raw bytes for a resource handle.
+Returns raw bytes for a resource handle or an upload/URL-backed resource ID.
 
 If offset is absent, it defaults to 0.
 
@@ -842,6 +910,12 @@ If length is absent, it defaults to -1.
 9. Files On Disk
 
 host.go contains the HTTP server, store, driver process management, and API handlers.
+
+url_host.go implements CLI argument filtering (-psn_* removal), open-URL driver validation/selection, and POST /api/openURL.
+
+search.go implements bounded server-side subtree Speedsearch (POST /api/search) and serves GET /static/speedsearch.js.
+
+bookmarks.go implements atomic file persistence (`bookmarks.json`, `recents.json`) and HTTP endpoints for saved bookmarks and recent history (`/api/bookmarks`, `/api/recents`, `/static/bookmarks.js`).
 
 logs.go contains host log-message functions added for installed-layout verification.
 
@@ -925,11 +999,21 @@ drivers_go/html_driver/html_driver.go contains the inert HTML title and link pre
 
 drivers_go/csv_driver/csv_driver.go contains the structured CSV preview driver.
 
-web/index.html contains the browser UI source embedded into the Datatree executable. It uses browser-native JavaScript fetch calls and has no separate runtime asset.
+drivers_go/tsv_driver/tsv_driver.go contains the structured TSV preview driver. drivers_go/driverlib/delimited.go provides the shared delimited-table parser.
+
+drivers_go/driverlib/filter_types.go defines FilterInfo, ByteBundle and ByteEntry. drivers_go/driverlib/formats.go holds byte-filter metadata, suffix classification and conservative signature detection. formats.go integrates the catalog, driver routing and /api/formats. drivers_go/filters groups additional archive, compression, structured-document, config, mail, encoding, database and binary-container readers by behavior. FORMATS.md defines their data contracts and scope. host_formats_selftest.go verifies every additional embedded filter retains rejected input and composes disk/fake-S3 GZIP to TAR to an Office ZIP to XML to Base64 to GZIP to JSON to decoded string bytes.
+
+web/index.html contains the browser UI source embedded into the Datatree executable. It uses browser-native JavaScript fetch calls and serves alongside embedded helper scripts GET /static/fold.js (`web/fold.js`), GET /static/speedsearch.js (`web/speedsearch.js`), GET /static/url_nav.js (`web/url_nav.js`), and GET /static/bookmarks.js (`web/bookmarks.js`).
+
+drivers_go/url_driver/url_driver.go implements read-only HTTP/HTTPS URL validation, fetching, classification, and listing for url resources.
+
+macos/DatatreeLauncher.m, macos/Info.plist, and macos/makeicon/main.go provide the Cocoa wrapper executable, app bundle metadata (Info.plist), and programmatic PNG/ICNS icon generator for macOS.
 
 build.sh compiles the host, every driver package, and the embedded web UI into one ./datatree executable.
 
-run.sh compiles the single executable, then starts it with its optional directory argument.
+build-macos-app.sh and build-macos-app.xsh compile the static Go executable (`Contents/MacOS/datatree-bin`), compile the Cocoa launcher (`Contents/MacOS/Datatree`), generate `Contents/Resources/AppIcon.icns`, lint and copy `Contents/Info.plist`, and ad-hoc sign `Datatree.app`.
+
+run.sh compiles the single executable, then starts it with its optional directory or URL argument.
 
 test.sh compiles the project, runs all package tests, verifies the single binary, runs driver modes from that binary, runs ./datatree -test, and runs install_test.sh.
 
@@ -994,5 +1078,7 @@ The self-test writes a fake gh executable, points DATATREE_GH at it, and verifie
 test.sh verifies that web/index.html contains right-arrow and down-arrow expansion states, the recursive-expand control, recursive traversal, GitHub and AWS action endpoint calls, confirmations, action explanations, AWS desired-state and JSON-patch inputs, bookmark fragment encoding, clipboard copy, and bookmark restoration. Browser verification confirms that activating recursive expansion reaches PR actions, CI jobs, and diff lines; action controls have their expected inputs and selectors; copied fragments restore their path after reload; and desktop and mobile layouts do not overflow or overlap.
 
 Every kubectl invocation recorded by the fake kubectl is get, api-resources, or config get-contexts. Any other recorded invocation fails the test, which guards the read-only guarantee.
+
+URL, Speedsearch, and macOS bundle verification: unit tests (`drivers_go/url_driver/url_driver_test.go`, `url_host_test.go`, `search_test.go`) verify URL validation, byte-limit/timeout/status enforcement, `-psn_*` argument filtering, `resolveRootTarget` for `s3://`, `k8s://`, `file://`, and `http(s)://` URLs, `/static/url_nav.js` serving, `/api/openURL` validation and content serving, `?res_id=` byte reads, `/api/search` matching across nested directories and ZIP/JSON containers with provider exclusion, and UI assertions in `test.sh`. The host `-test` self-test (`host_url_search_selftest.go`) exercises live HTTP loopback serving through `root_driver` HTTP URL roots, `url_driver` expansion, `/api/openURL`, `/api/search`, and a full `s3://example-bucket/path/to/report.json` hierarchical AWS S3 tree walk (`aws` -> profile -> regions -> `[service catalog]` -> `S3 buckets` -> bucket -> prefixes -> object -> `json_driver`) via a fake AWS CLI. `./build-macos-app.sh` and `xsh build-macos-app.xsh` produce a valid, codesign-verified `Datatree.app` whose bundled `Contents/MacOS/datatree-bin -test` passes cleanly.
 
 The self-test removes its temporary fixture directory when it finishes.

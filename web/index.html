@@ -14,7 +14,7 @@
     .kind-diff-delete code { background: #fee2e2; color: #7f1d1d; }
     .kind-diff-hunk code { background: #dbeafe; color: #1e3a8a; }
     .kind-diff-meta code { background: #e5e7eb; color: #374151; }
-    .bookmark { width: 1.4rem; display: inline-flex; justify-content: center; }
+    .bookmark, .bookmark-star { width: 1.4rem; display: inline-flex; justify-content: center; }
     .action-control { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; min-width: 0; }
     .action-control textarea { width: min(40rem, 100%); min-height: 4rem; box-sizing: border-box; font: inherit; }
     .action-control input { min-width: min(20rem, 100%); box-sizing: border-box; font: inherit; }
@@ -28,8 +28,14 @@
     button { padding: 0.25rem 0.5rem; font-size: 0.8rem; }
     a.download { font-size: 0.8rem; }
     #fold-current { position: fixed; right: 1rem; bottom: 1rem; z-index: 20; max-width: min(22rem, calc(100vw - 2rem)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: .65rem .9rem; border: 1px solid #aaa; border-radius: .6rem; background: #fff; color: #174b80; box-shadow: 0 2px 12px #0003; }
-    .upload { margin: 0 0 1.5rem 0; display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+    .upload { margin: 0 0 1rem 0; display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
     .upload select { padding: 0.2rem; font-size: 0.8rem; }
+    #upload-driver, #url-driver { max-width: min(34rem, 80vw); }
+    #url-input, #speedsearch-input { min-width: min(22rem, 80vw); padding: 0.25rem 0.4rem; font: inherit; }
+    .speedsearch { margin: 0.75rem 0; display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+    #speedsearch-results { margin-bottom: 1rem; padding-top: 0.25rem; padding-bottom: 0.25rem; border-left-color: #174b80; }
+    .url-target-highlight { background: #fff8c5; outline: 2px solid #d4a72c; border-radius: 3px; }
+    select[aria-label^="Filter for"] { width: 11rem; max-width: 35vw; min-width: 0; }
     @media (max-width: 600px) {
       body { margin: 1rem 0.75rem; }
       .tree { margin-left: 0.35rem; padding-left: 0.35rem; }
@@ -52,20 +58,42 @@
     <span class="meta" id="upload-status"></span>
     <span class="meta" id="upload-limits">Loading upload limits...</span>
   </div>
+  <div class="upload">
+    <label for="url-input">Open a URL to inspect:</label>
+    <input type="text" id="url-input" placeholder="s3://bucket/path/to/file, file:///path, or https://..." title="Enter an s3://, k8s://, or file:// URL to open the tree at that path, or an http(s):// URL to fetch read-only">
+    <label for="url-driver">Preview using:</label>
+    <select id="url-driver" title="Choose the driver that understands the fetched URL response"></select>
+    <button type="button" id="url-button">Open URL</button>
+    <button type="button" id="bookmark-url-button" title="Save this URL as a persistent bookmark">☆ Bookmark</button>
+    <span class="meta" id="url-status"></span>
+  </div>
   <div id="upload-tree"></div>
 
   <!-- Auto-load selected directory -->
   <div id="loader">Loading...</div>
   <div id="bookmark-status" class="meta" title="Reports whether a copied tree link is ready or whether a bookmarked path could be restored"></div>
+  <div class="speedsearch">
+    <label for="speedsearch-input">Speedsearch:</label>
+    <input type="search" id="speedsearch-input" placeholder="Filter all items, including folded branches..." title="Filter visible items, folded branches, and unopened directories/archives">
+    <button type="button" id="speedsearch-clear" hidden title="Clear Speedsearch and restore folded branches">Clear</button>
+    <span id="speedsearch-status" class="meta" role="status"></span>
+  </div>
+  <div id="speedsearch-results" class="tree" hidden></div>
   <button type="button" id="save-tree" disabled>Save visible tree as JSON</button>
   <span id="save-tree-status" class="meta" role="status"></span>
 
   <!-- Directory tree -->
+  <div id="saved-tree"></div>
   <div id="tree"></div>
   <button type="button" id="fold-current" hidden title="Scroll into an expanded branch to fold up that branch only">↑ Fold up</button>
   <script src="/static/fold.js" defer></script>
+  <script src="/static/speedsearch.js" defer></script>
+  <script src="/static/url_nav.js" defer></script>
+  <script src="/static/bookmarks.js" defer></script>
 
   <script>
+    const filterCatalog = new Map();
+
     // Simple event handler using document ready and fetch
     document.addEventListener('DOMContentLoaded', function() {
       if (window.location.protocol === 'file:') {
@@ -75,37 +103,63 @@
         document.getElementById('upload-file').disabled = true;
         document.getElementById('upload-driver').disabled = true;
         document.getElementById('upload-button').disabled = true;
+        document.getElementById('url-input').disabled = true;
+        document.getElementById('url-driver').disabled = true;
+        document.getElementById('url-button').disabled = true;
+        document.getElementById('bookmark-url-button').disabled = true;
+        document.getElementById('speedsearch-input').disabled = true;
         document.getElementById('upload-limits').textContent = '';
       } else {
-        setTimeout(loadHomeDirectory, 1000); // Give more time for root driver to load
-        loadDriverChoices();
+        setTimeout(async () => { await loadDriverChoices(); await loadHomeDirectory(); }, 1000); // Give more time for root driver to load
         loadUploadSettings();
         document.getElementById('upload-button').onclick = uploadAndLoad;
+        document.getElementById('url-button').onclick = openURLAndLoad;
+        document.getElementById('bookmark-url-button').onclick = () => {
+          if (typeof window.bookmarkCurrentInputURL === 'function') {
+            window.bookmarkCurrentInputURL();
+          } else {
+            // Bookmark script unavailable.
+          }
+        };
+        document.getElementById('url-input').addEventListener('keydown', event => {
+          if (event.key === 'Enter') {
+            openURLAndLoad();
+          } else {
+            // Non-Enter keys continue normal URL typing.
+          }
+        });
       }
     });
 
     // Fill the upload driver selector with drivers that accept uploaded files.
-    // zip_driver is preselected because archives are the most common upload.
+    // Automatic selection checks the filename first, then inspects the bytes.
     async function loadDriverChoices() {
       const select = document.getElementById('upload-driver');
+      const urlSelect = document.getElementById('url-driver');
       try {
-        const response = await fetch('/api/drivers');
+        const response = await fetch('/api/formats');
         if (!response.ok) {
-          throw new Error(`GET /api/drivers returned ${response.status}`);
+          throw new Error(`GET /api/formats returned ${response.status}`);
         }
         const drivers = await response.json();
         select.innerHTML = '';
-        drivers.forEach(driver => {
+        urlSelect.innerHTML = '';
+        drivers.forEach(info => {
+          const driver = info.driver;
+          filterCatalog.set(info.kind, info);
           const option = document.createElement('option');
           option.value = driver;
-          option.textContent = driver;
-          if (driver === 'zip_driver') {
+          option.textContent = `${info.kind.toUpperCase()} — ${info.description}`;
+          option.title = info.description;
+          if (driver === 'auto_driver') {
             option.selected = true;
           } else {
             // Other drivers stay selectable but not preselected
           }
           select.appendChild(option);
+          urlSelect.appendChild(option.cloneNode(true));
         });
+        urlSelect.value = 'auto_driver';
       } catch (error) {
         document.getElementById('upload-status').textContent = `Could not list drivers: ${error.message}`;
       }
@@ -128,25 +182,148 @@
       }
     }
 
+    async function renderRetainedTree(label, kind, size, data, statusElement, previewBlob = null, resID = '') {
+      const uploadTree = document.getElementById('upload-tree');
+      const subContainer = document.createElement('div');
+      subContainer.className = 'tree';
+      const unloadButton = document.createElement('button');
+      unloadButton.type = 'button';
+      unloadButton.textContent = `Close ${label}`;
+      unloadButton.title = 'Stop this preview and immediately release its retained bytes and child handles';
+      unloadButton.onclick = async function() {
+        const response = await fetch('/api/unload', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({session: data.session})
+        });
+        if (response.ok) {
+          for (const node of [subContainer, ...subContainer.querySelectorAll('.tree')]) {
+            if (node.previewURL) {
+              URL.revokeObjectURL(node.previewURL);
+            } else {
+              // Text previews allocate no blob URLs.
+            }
+          }
+          subContainer.remove();
+          statusElement.className = 'meta';
+          statusElement.textContent = `Closed ${label} and released its retained data`;
+        } else {
+          const message = await response.text();
+          statusElement.className = 'error';
+          statusElement.textContent = `Could not close ${label}: ${message}`;
+        }
+      };
+      subContainer.appendChild(unloadButton);
+      const uploadRow = document.createElement('div');
+      uploadRow.className = 'file-item';
+      const uploadExpander = document.createElement('span');
+      uploadExpander.className = 'expander';
+      const uploadToggle = document.createElement('button');
+      uploadToggle.type = 'button';
+      uploadToggle.textContent = '▾';
+      uploadToggle.title = 'Collapse this opened tree without releasing its bytes';
+      uploadExpander.appendChild(uploadToggle);
+      const uploadName = document.createElement('code');
+      uploadName.textContent = label;
+      uploadRow.append(uploadExpander, uploadName);
+      const uploadContent = document.createElement('div');
+      uploadContent.className = 'tree';
+      uploadContent.foldByHiding = true;
+      rememberBranch(uploadContent, uploadRow, label);
+      uploadToggle.onclick = () => {
+        if (uploadContent.hidden) {
+          uploadContent.hidden = false;
+          setExpansionState(uploadRow, true);
+        } else {
+          collapseBranch(uploadRow);
+        }
+      };
+      subContainer.append(uploadRow, uploadContent);
+      await appendContentPreview(uploadContent, {name: label, kind: kind, size: size}, null, previewBlob, resID);
+      const treeContents = document.createElement('div');
+      uploadContent.appendChild(treeContents);
+      if (data.resources && data.resources.length > 0) {
+        treeContents.renderedResources = renderDirectory(treeContents, data.resources, null);
+      } else {
+        const empty = document.createElement('div');
+        empty.className = 'meta';
+        empty.textContent = 'No child resources';
+        treeContents.appendChild(empty);
+      }
+      uploadTree.insertBefore(subContainer, uploadTree.firstChild);
+    }
+
+    async function openURLAndLoad() {
+      const urlInput = document.getElementById('url-input');
+      const selectedDriver = document.getElementById('url-driver').value;
+      const status = document.getElementById('url-status');
+      const rawURL = urlInput.value.trim();
+      status.className = 'meta';
+      if (!rawURL) {
+        status.className = 'error';
+        status.textContent = 'Enter an s3://, k8s://, file://, or http(s):// URL first';
+        return;
+      } else if (window.isTreeNavURL && window.isTreeNavURL(rawURL)) {
+        try {
+          await window.openTreeURL(rawURL, status, selectedDriver);
+          if (typeof window.recordRecentForURL === 'function') {
+            await window.recordRecentForURL(rawURL, '');
+          } else {
+            // Recents helper unavailable.
+          }
+        } catch (_) {
+          // Status element already displays the exact navigation failure.
+        }
+        return;
+      } else {
+        status.textContent = `Fetching ${rawURL}...`;
+      }
+      try {
+        const response = await fetch('/api/openURL', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({url: rawURL, driver: selectedDriver || 'auto_driver'})
+        });
+        if (!response.ok) {
+          const message = await response.text();
+          throw new Error(message);
+        } else {
+          const data = await response.json();
+          status.textContent = `${data.url} (${data.driver}, ${data.status}, ${data.size} bytes)`;
+          const previewKind = selectedDriver && selectedDriver !== 'auto_driver' ? selectedDriver.replace('_driver', '') : (data.kind || data.driver.replace('_driver', ''));
+          await renderRetainedTree(data.url, previewKind, data.size, data, status, null, data.res_id);
+          if (typeof window.initBookmarksAndRecents === 'function') {
+            await window.initBookmarksAndRecents();
+          } else {
+            // Saved-branches helper unavailable.
+          }
+        }
+      } catch (error) {
+        status.className = 'error';
+        status.textContent = `Could not open ${rawURL}: ${error.message}`;
+      }
+    }
+    window.openURLAndLoad = openURLAndLoad;
+
     // Upload the chosen file as a raw blob, then mount the chosen driver on
     // it and render the resulting resources as a tree.
     async function uploadAndLoad() {
       const fileInput = document.getElementById('upload-file');
-      const driver = document.getElementById('upload-driver').value;
+      const selectedDriver = document.getElementById('upload-driver').value;
       const status = document.getElementById('upload-status');
-      const uploadTree = document.getElementById('upload-tree');
       status.className = 'meta';
       if (!fileInput.files || fileInput.files.length === 0) {
         status.className = 'error';
         status.textContent = 'Choose a file to upload first';
         return;
       }
-      if (!driver) {
+      if (!selectedDriver) {
         status.className = 'error';
         status.textContent = 'Choose a driver to load on the upload first';
         return;
       }
       const file = fileInput.files[0];
+      const driver = selectedDriver === 'auto_driver' ? driverForFilename(file.name) : selectedDriver;
       status.textContent = `Uploading ${file.name}...`;
       try {
         const uploadResponse = await fetch('/api/upload', { method: 'POST', body: file });
@@ -167,72 +344,7 @@
         }
         const data = await loadResponse.json();
         status.textContent = `${file.name} (${data.driver}, session ${data.session})`;
-        const subContainer = document.createElement('div');
-        subContainer.className = 'tree';
-        const unloadButton = document.createElement('button');
-        unloadButton.type = 'button';
-        unloadButton.textContent = `Close ${file.name}`;
-        unloadButton.title = 'Stop this preview and immediately release its uploaded bytes and child handles';
-        unloadButton.onclick = async function() {
-          const response = await fetch('/api/unload', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({session: data.session})
-          });
-          if (response.ok) {
-            for (const node of [subContainer, ...subContainer.querySelectorAll('.tree')]) {
-              if (node.previewURL) {
-                URL.revokeObjectURL(node.previewURL);
-              } else {
-                // Text previews allocate no blob URLs.
-              }
-            }
-            subContainer.remove();
-            status.textContent = `Closed ${file.name} and released its retained upload`;
-          } else {
-            const message = await response.text();
-            status.className = 'error';
-            status.textContent = `Could not close ${file.name}: ${message}`;
-          }
-        };
-        subContainer.appendChild(unloadButton);
-        const uploadRow = document.createElement('div');
-        uploadRow.className = 'file-item';
-        const uploadExpander = document.createElement('span');
-        uploadExpander.className = 'expander';
-        const uploadToggle = document.createElement('button');
-        uploadToggle.type = 'button';
-        uploadToggle.textContent = '▾';
-        uploadToggle.title = 'Collapse this uploaded tree without releasing its bytes';
-        uploadExpander.appendChild(uploadToggle);
-        const uploadName = document.createElement('code');
-        uploadName.textContent = file.name;
-        uploadRow.append(uploadExpander, uploadName);
-        const uploadContent = document.createElement('div');
-        uploadContent.className = 'tree';
-        uploadContent.foldByHiding = true;
-        rememberBranch(uploadContent, uploadRow, file.name);
-        uploadToggle.onclick = () => {
-          if (uploadContent.hidden) {
-            uploadContent.hidden = false;
-            setExpansionState(uploadRow, true);
-          } else {
-            collapseBranch(uploadRow);
-          }
-        };
-        subContainer.append(uploadRow, uploadContent);
-        await appendContentPreview(uploadContent, {name: file.name, kind: driver.replace('_driver', ''), size: file.size}, null, file);
-        const treeContents = document.createElement('div');
-        uploadContent.appendChild(treeContents);
-        if (data.resources && data.resources.length > 0) {
-            renderDirectory(treeContents, data.resources, null);
-        } else {
-          const empty = document.createElement('div');
-          empty.className = 'meta';
-          empty.textContent = 'No child resources';
-          treeContents.appendChild(empty);
-        }
-        uploadTree.insertBefore(subContainer, uploadTree.firstChild);
+        await renderRetainedTree(file.name, driver.replace('_driver', ''), file.size, data, status, file, upload.res_id);
       } catch (error) {
         status.className = 'error';
         status.textContent = `Could not load ${file.name}: ${error.message}`;
@@ -247,10 +359,55 @@
           if (response.ok) {
             const data = await response.json();
             document.getElementById('loader').textContent = '';
+            window.datatreeRootInfo = {
+              rootDirectory: data.root_directory || '',
+              homeDirectory: data.home_directory || ''
+            };
             const rendered = renderDirectory(document.getElementById('tree'), data.resources, []);
+            window.rootRenderedResources = rendered;
+            if (typeof window.initBookmarksAndRecents === 'function') {
+              await window.initBookmarksAndRecents();
+            } else {
+              // Saved bookmarks/recents helper unavailable.
+            }
             const saveTree = document.getElementById('save-tree');
             saveTree.onclick = () => saveVisibleTree(rendered);
             saveTree.disabled = false;
+            if (data.root_url) {
+              const urlInput = document.getElementById('url-input');
+              if (urlInput) {
+                urlInput.value = data.root_url;
+              } else {
+                // URL input not mounted.
+              }
+              if (window.isTreeNavURL && window.isTreeNavURL(data.root_url)) {
+                try {
+                  await window.openTreeURL(data.root_url, document.getElementById('url-status'), '');
+                } catch (_) {
+                  // Root URL navigation error displayed in #url-status.
+                }
+              } else {
+                const urlEntry = rendered.find(candidate => candidate.resource.kind === 'url' && candidate.name === data.root_url);
+                if (urlEntry && urlEntry.handle) {
+                  await expandResource(urlEntry.item, urlEntry.resource, urlEntry.handle, urlEntry.name, urlEntry.path);
+                  const urlTree = urlEntry.item.nextSibling;
+                  if (urlTree && urlTree.className === 'tree' && urlTree.renderedResources) {
+                    const primaryChild = urlTree.renderedResources.find(child => !['kv', 'raw', 'error'].includes(child.resource.kind) && child.handle && isExpandable(child.resource.kind));
+                    if (primaryChild) {
+                      await expandResource(primaryChild.item, primaryChild.resource, primaryChild.handle, primaryChild.name, primaryChild.path);
+                    } else {
+                      // Leaf or non-expandable URL response stops at URL listing.
+                    }
+                  } else {
+                    // URL expansion produced no nested tree.
+                  }
+                } else {
+                  // Root URL entry not found in listing.
+                }
+              }
+            } else {
+              // Normal directory or location-browser root.
+            }
             await restoreBookmarkedPath(rendered);
             return; // Success!
           }
@@ -267,7 +424,19 @@
     }
 
     function hasContentBytes(resource) {
-      return !isAction(resource.kind) && resource.kind !== 'error' && (resource.readable || ['archive', 'zip', 'file', 'text', 'json', 'image', 'pdf', 'html', 'csv', 'diff'].includes(resource.kind));
+      return !isAction(resource.kind) && resource.kind !== 'error' && (resource.readable || filterCatalog.has(resource.kind) || ['archive', 'zip', 'file', 'text', 'json', 'image', 'pdf', 'html', 'csv', 'tsv', 'diff'].includes(resource.kind));
+    }
+
+    function driverForFilename(name) {
+      const lower = name.toLowerCase();
+      for (const info of filterCatalog.values()) {
+        if ((info.extensions || []).some(extension => lower.endsWith(extension))) {
+          return info.driver;
+        } else {
+          // The automatic byte detector handles names without a known extension.
+        }
+      }
+      return 'auto_driver';
     }
 
     function renderDirectory(container, resources, parentPath = null) {
@@ -282,7 +451,7 @@
         item.classList.add(`kind-${r.kind}`);
         const itemPath = parentPath === null ? null : parentPath.concat([{name: name, kind: r.kind}]);
         
-        const icons = { directory: '📁', git: '🔀', github: '◉', aws: '☁', hardware: '🖥️', usb: '🔌', diff: 'Δ', 'diff-add': '+', 'diff-delete': '-', 'diff-context': ' ', 'diff-hunk': '@@', 'diff-meta': 'i', kubernetes: '☸️', json: '🗂️', kv: '▪️', error: '⚠️', 'k8s-pod': '📦', 'k8s-workload': '⚙️', 'k8s-service': '🔌', 'k8s-configmap': '🗒️', 'k8s-node': '🖥️' };
+        const icons = { directory: '📁', url: '🌐', git: '🔀', github: '◉', aws: '☁', hardware: '🖥️', usb: '🔌', diff: 'Δ', 'diff-add': '+', 'diff-delete': '-', 'diff-context': ' ', 'diff-hunk': '@@', 'diff-meta': 'i', kubernetes: '☸️', json: '🗂️', kv: '▪️', error: '⚠️', 'k8s-pod': '📦', 'k8s-workload': '⚙️', 'k8s-service': '🔌', 'k8s-configmap': '🗒️', 'k8s-node': '🖥️' };
         const icon = isAction(r.kind) ? '▶' : (icons[r.kind] || '📄');
         const iconSpan = document.createElement('span');
         iconSpan.textContent = icon;
@@ -305,6 +474,8 @@
         recursiveExpander.className = 'recursive-expander';
         const bookmark = document.createElement('span');
         bookmark.className = 'bookmark';
+        const bookmarkStar = document.createElement('span');
+        bookmarkStar.className = 'bookmark-star';
         if (handle && isExpandable(r.kind)) {
           const expand = document.createElement('button');
           expand.type = 'button';
@@ -339,6 +510,26 @@
               await copyBookmark(itemPath, name);
             };
             bookmark.appendChild(copyLink);
+            const star = document.createElement('button');
+            star.type = 'button';
+            star.className = 'row-bookmark-btn';
+            if (typeof window.savedEntryKeyForRow === 'function') {
+              star.dataset.bmKey = window.savedEntryKeyForRow(name, r, itemPath);
+            } else {
+              star.dataset.bmKey = '';
+            }
+            const bookmarked = typeof window.isRowBookmarked === 'function' && window.isRowBookmarked(name, r, itemPath);
+            star.textContent = bookmarked ? '★' : '☆';
+            star.title = bookmarked ? 'Remove this bookmark' : 'Save persistent bookmark for this location';
+            star.onclick = async event => {
+              event.stopPropagation();
+              if (typeof window.toggleRowBookmark === 'function') {
+                await window.toggleRowBookmark(name, r, itemPath);
+              } else {
+                // Bookmarks helper not yet loaded.
+              }
+            };
+            bookmarkStar.appendChild(star);
           } else {
             // Uploaded trees do not survive a page reload and cannot be bookmarked
           }
@@ -346,11 +537,13 @@
           expander.textContent = '';
           recursiveExpander.textContent = '';
           bookmark.textContent = '';
+          bookmarkStar.textContent = '';
         }
 
         item.appendChild(expander);
         item.appendChild(recursiveExpander);
         item.appendChild(bookmark);
+        item.appendChild(bookmarkStar);
         item.appendChild(iconSpan);
         if (isGitHubAction(r.kind)) {
           item.appendChild(createGitHubActionControl(r, handle, name));
@@ -379,7 +572,7 @@
           for (const option of document.getElementById('upload-driver').options) {
             filter.appendChild(option.cloneNode(true));
           }
-          const defaultDriver = {archive: 'zip_driver', zip: 'zip_driver', kv: 'text_driver', file: 'text_driver'}[r.kind] || `${r.kind}_driver`;
+          const defaultDriver = {archive: 'zip_driver', zip: 'zip_driver', kv: 'text_driver', raw: 'auto_driver', file: 'auto_driver'}[r.kind] || `${r.kind}_driver`;
           filter.value = Array.from(filter.options).some(option => option.value === defaultDriver) ? defaultDriver : 'text_driver';
           const apply = document.createElement('button');
           apply.textContent = 'Apply filter';
@@ -790,15 +983,15 @@
     }
 
     function isExpandable(kind) {
-      return ['directory', 'git', 'github', 'aws', 'hardware', 'usb', 'diff', 'kubernetes', 'k8s-pod', 'k8s-workload', 'k8s-service', 'k8s-configmap', 'k8s-node', 'text', 'archive', 'zip', 'image', 'pdf', 'html', 'json', 'csv', 'file'].includes(kind);
+      return filterCatalog.has(kind) || ['directory', 'url', 'git', 'github', 'aws', 'hardware', 'usb', 'diff', 'kubernetes', 'k8s-pod', 'k8s-workload', 'k8s-service', 'k8s-configmap', 'k8s-node', 'text', 'archive', 'zip', 'image', 'pdf', 'html', 'json', 'csv', 'tsv', 'file'].includes(kind);
     }
 
     async function expandRenderedResources(rendered) {
       for (const child of rendered) {
-        if (child.item.isConnected && child.handle && isExpandable(child.resource.kind)) {
+        if (child.item.isConnected && child.handle && isExpandable(child.resource.kind) && child.resource.kind !== 'url') {
           await expandResource(child.item, child.resource, child.handle, child.name, child.path, true);
         } else {
-          // Leaves have no descendants to expand
+          // Leaves and extracted URL references are not auto-fetched during recursive expansion.
         }
       }
     }
@@ -813,7 +1006,7 @@
       }
     }
 
-    async function appendPagedContent(container, resource, handle, blob = null) {
+    async function appendPagedContent(container, resource, handle, blob = null, resID = '') {
       const pageSize = 65536;
       let offset = 0;
       const preview = document.createElement('pre');
@@ -830,7 +1023,8 @@
       async function showPage(start) {
         previous.disabled = next.disabled = true;
         try {
-          const response = blob ? new Response(blob.slice(start, start + pageSize)) : await fetch(`/api/data?handle=${encodeURIComponent(handle)}&offset=${start}&length=${pageSize}`);
+          const dataQuery = handle ? `handle=${encodeURIComponent(handle)}` : `res_id=${encodeURIComponent(resID)}`;
+          const response = blob ? new Response(blob.slice(start, start + pageSize)) : await fetch(`/api/data?${dataQuery}&offset=${start}&length=${pageSize}`);
           if (!response.ok) {
             throw new Error(await response.text());
           } else {
@@ -857,15 +1051,16 @@
       await showPage(0);
     }
 
-    async function appendContentPreview(container, resource, handle, blob = null) {
-      if (['text', 'file', 'html', 'json', 'csv'].includes(resource.kind)) {
-        await appendPagedContent(container, resource, handle, blob);
+    async function appendContentPreview(container, resource, handle, blob = null, resID = '') {
+      if (!['image', 'pdf'].includes(resource.kind)) {
+        await appendPagedContent(container, resource, handle, blob, resID);
         return true;
       } else {
         // Media formats are rendered by the browser from complete bytes.
       }
       if (['text', 'file', 'html', 'image', 'pdf'].includes(resource.kind)) {
-        const response = blob ? new Response(blob) : await fetch(`/api/data?handle=${encodeURIComponent(handle)}&offset=0&length=-1`);
+        const dataQuery = handle ? `handle=${encodeURIComponent(handle)}` : `res_id=${encodeURIComponent(resID)}`;
+        const response = blob ? new Response(blob) : await fetch(`/api/data?${dataQuery}&offset=0&length=-1`);
         if (!response.ok) {
           throw new Error(`Cannot read content: ${await response.text()}`);
         } else {
@@ -915,6 +1110,7 @@
 
       const subContainer = document.createElement('div');
       subContainer.className = 'tree';
+      subContainer.parentBranchPath = path;
       rememberBranch(subContainer, item, name);
       subContainer.style.marginTop = '0.5rem';
       
@@ -939,6 +1135,12 @@
         }
         
         const data = await response.json();
+        item.cachedBranch = null;
+        if (!recursively && path && path.length > 0 && typeof window.recordRecentForRow === 'function') {
+          window.recordRecentForRow(name, resource, path);
+        } else {
+          // Recursive scans and upload roots skip automatic recents recording.
+        }
         if (!subContainer.isConnected) {
           return;
         } else {

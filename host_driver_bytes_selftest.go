@@ -24,6 +24,8 @@ func checkAllFilterBytes(store *Store, archive []byte) error {
 		{"pdf_driver", []byte("%PDF-1.7 /Type /Page /URI (https://example.com/source)")},
 		{"image_driver", png},
 		{"csv_driver", []byte("field,value\r\nname,\"actual data\"\r\n")},
+		{"tsv_driver", []byte("field\tvalue\r\nname\t\"actual\tdata\"\r\n")},
+		{"tsv_driver", []byte("field\tvalue\nname\t\"unterminated")},
 		{"diff_driver", []byte("@@ -1 +1 @@\r\n-old\r\n+new\r\n")},
 		{"json_driver", []byte(" {\"field\": [true, null, \"actual value\"]} \n")},
 		{"json_driver", []byte(`{"apiVersion":"datatree.local/v1","kind":"DriverReadError","message":"this is actual file data"}`)},

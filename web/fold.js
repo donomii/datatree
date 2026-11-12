@@ -9,6 +9,11 @@ function rememberBranch(tree, item, name) {
 function collapseBranch(item) {
   const tree = item.nextElementSibling;
   if (tree?.classList.contains('tree') && tree.branchOwner === item) {
+    if (typeof cacheBranchForSearch === 'function') {
+      cacheBranchForSearch(item, tree);
+    } else {
+      // Speedsearch cache helper is unavailable.
+    }
     if (tree.foldByHiding) {
       tree.hidden = true;
     } else {

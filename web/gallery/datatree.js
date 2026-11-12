@@ -56,6 +56,7 @@ function isBranch(value) {
 }
 
 async function liveResources(endpoint, body) {
+    await loadLiveFormats();
     const response = await fetch(endpoint, body === undefined ? {} : {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -80,7 +81,27 @@ async function liveResources(endpoint, body) {
     return result;
 }
 
-const liveKinds = new Set(["directory", "archive", "zip", "json", "text", "file", "image", "pdf", "html", "csv"]);
+const liveKinds = new Set(["directory", "archive", "zip", "json", "text", "file", "image", "pdf", "html", "csv", "tsv"]);
+let liveFormatRequest = null;
+
+async function loadLiveFormats() {
+    if (liveFormatRequest === null) {
+        liveFormatRequest = (async () => {
+            const response = await fetch("/api/formats");
+            if (!response.ok) throw new Error(`Could not load format catalog (${response.status}).`);
+            const formats = await response.json();
+            for (const format of formats) liveKinds.add(format.kind);
+        })();
+    } else {
+        // Reuse the catalog for every branch in this browsing session.
+    }
+    try {
+        await liveFormatRequest;
+    } catch (error) {
+        liveFormatRequest = null;
+        throw error;
+    }
+}
 
 class LiveBranch {
     constructor(row) {

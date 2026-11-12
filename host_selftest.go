@@ -553,6 +553,7 @@ func runHostSelfTest() error {
 	}
 	nestedZip, err := makeTestZip([]testZipEntry{
 		{Name: "deep.txt", Data: []byte("deep https://example.com/deep\n")},
+		{Name: "table.tsv", Data: []byte(tsvFixture)},
 	})
 	if err != nil {
 		return fmt.Errorf("cannot create nested zip fixture: %v", err)
@@ -668,6 +669,21 @@ func runHostSelfTest() error {
 	switch err := checkAllFilterBytes(store, archiveZip); {
 	case err != nil:
 		return fmt.Errorf("filter byte-contract self-test failed: %v", err)
+	default:
+	}
+	switch err := checkLocalTSV(store, fixtureDir); {
+	case err != nil:
+		return fmt.Errorf("local TSV composition self-test failed: %v", err)
+	default:
+	}
+	switch err := checkAdditionalFilters(store, fixtureDir); {
+	case err != nil:
+		return fmt.Errorf("additional format self-test failed: %v", err)
+	default:
+	}
+	switch err := checkURLOpeningAndDriver(fixtureDir); {
+	case err != nil:
+		return fmt.Errorf("URL and speedsearch self-test failed: %v", err)
 	default:
 	}
 	localMachineStore := NewStore()

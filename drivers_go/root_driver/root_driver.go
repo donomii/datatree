@@ -10,6 +10,7 @@ import (
 
 	"datahumper/drivers_go/driverlib"
 	systemprofilerdriver "datahumper/drivers_go/system_profiler_driver"
+	urldriver "datahumper/drivers_go/url_driver"
 )
 
 // root_driver lists a selected directory or, when no directory was selected,
@@ -49,6 +50,8 @@ const hardwareEntryKey = "\x00datatree:virtual:hardware"
 const usbEntryName = "usb"
 
 const usbEntryKey = "\x00datatree:virtual:usb"
+
+const urlEntryKey = "\x00datatree:root:url"
 
 // resolveKubectl locates the kubectl executable. DATATREE_KUBECTL overrides
 // the search so tests can substitute a fake kubectl.
@@ -109,6 +112,7 @@ func Run() {
 	dec := json.NewDecoder(os.Stdin)
 
 	var rootDir string
+	var rootURL string
 	var locations map[string]string
 	var resources []driverlib.Resource
 	switch len(os.Args) {
@@ -123,7 +127,18 @@ func Run() {
 		default:
 		}
 	case 2:
-		rootDir = os.Args[1]
+		if urldriver.IsHTTPURL(os.Args[1]) {
+			parsedURL, urlErr := urldriver.ValidateURL(os.Args[1])
+			if urlErr != nil {
+				fmt.Fprintf(os.Stderr, "Failed to open root URL %s: %v\n", os.Args[1], urlErr)
+				enc.Encode(driverlib.ResourcesMsg{Resources: nil})
+				return
+			} else {
+				rootURL = parsedURL.String()
+			}
+		} else {
+			rootDir = os.Args[1]
+		}
 	default:
 		fmt.Fprintf(os.Stderr, "Failed to select the root directory: expected zero or one directory argument, got %d arguments\n", len(os.Args)-1)
 		enc.Encode(driverlib.ResourcesMsg{Resources: nil})
@@ -191,6 +206,12 @@ func Run() {
 		fmt.Fprintf(os.Stderr, "Root driver skipping hardware and usb entries: %v\n", systemProfilerErr)
 	}
 
+	if rootURL != "" {
+		resources = append([]driverlib.Resource{{Name: rootURL, Kind: "url", Size: int64(len(rootURL)), Key: urlEntryKey, Readable: true}}, resources...)
+	} else {
+		// Directory and location-browser modes emit no root URL entry.
+	}
+
 	// Send initial resources
 	switch err := enc.Encode(driverlib.ResourcesMsg{Resources: resources}); {
 	case err != nil:
@@ -245,6 +266,12 @@ func Run() {
 		switch {
 		case req.Child == hardwareEntryKey:
 			driverlib.SendRange(enc, systemprofilerdriver.HardwareRootState())
+			continue
+		default:
+		}
+		switch {
+		case req.Child == urlEntryKey && rootURL != "":
+			driverlib.SendRange(enc, []byte(rootURL))
 			continue
 		default:
 		}

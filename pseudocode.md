@@ -25,19 +25,28 @@ Store:
 ## Host startup
 
 ```
-root_directory = argument directory, or empty for the location browser
+root_directory, root_url = resolved directory path / containing directory and validated URL (s3://, k8s://, file://, http://, https://; ignoring macOS -psn_* launch args)
 store = NewStore()
 store.root_directory = root_directory
+store.root_url       = root_url
 spawn goroutine:
     sleep 200ms
     loadRootDriver()                # populates store.root_resources
 http.Handle("/",            serve embedded web UI)
+http.Handle("/static/fold.js",        serve embedded fold-up helper script)
+http.Handle("/static/speedsearch.js", serve embedded Speedsearch helper script)
+http.Handle("/static/url_nav.js",     serve embedded tree-URL navigation script for s3://, k8s://, file://)
+http.Handle("/static/bookmarks.js",   serve embedded persistent bookmarks and top-level recents/bookmarks branch UI)
 web UI snapshot: visit visible directory rows and currently expanded children
 omit action rows and handles; save name, kind, size, and children as version 1 JSON
 reject snapshots exceeding 12 levels, 5000 resources, or 4 MiB
 http.Handle("/api/drivers", list upload-compatible driver names)
-http.Handle("/api/list",    return store.root_resources)
+http.Handle("/api/list",    return { resources, root_url, root_directory, home_directory })
+http.Handle("/api/bookmarks",         GET/POST/DELETE persistent bookmarks in bookmarks.json)
+http.Handle("/api/recents",           GET/POST/DELETE recent items history in recents.json)
 http.Handle("/api/upload",  store request bytes and return resource id)
+http.Handle("/api/openURL", fetch http:// or https:// URL read-only, store body as res_id, and mount selected driver)
+http.Handle("/api/search",  bounded BFS across unopened directories and safe containers matching query tokens)
 http.Handle("/api/upload-settings", return active limits and their explanation)
 http.Handle("/api/load",    mount selected driver on an uploaded resource id)
 http.Handle("/api/autoLoad", autoLoad)
@@ -97,6 +106,10 @@ function rootDriverWithoutDirectory():
         emit "MOUNT: absolute path" as directory carrying its absolute path
     ignore missing mount roots, non-directories, and duplicate paths
     serve a location path only for an exact emitted name
+function rootDriverWithURL(url):
+    emit url as resource { name: url, kind: "url", key: "\x00datatree:root:url" }
+    serve url string bytes when range requests address "\x00datatree:root:url"
+
 function rootDriverWithDirectory(directory):
     list the directory's real children
 
@@ -220,6 +233,9 @@ POST /api/autoLoad { handle, kind }:
         "pdf"                 -> "pdf_driver"
         "html"                -> "html_driver"
         "csv"                 -> "csv_driver"
+        "tsv"                 -> "tsv_driver"
+        "file"                -> "auto_driver"
+        additional byte kind  -> matching catalog driver
         "kubernetes"          -> "kubernetes_driver"
         "json"                -> "json_driver"
         "k8s-pod"             -> "k8s_pod_driver"
@@ -227,7 +243,8 @@ POST /api/autoLoad { handle, kind }:
         "k8s-service"         -> "k8s_service_driver"
         "k8s-configmap"       -> "k8s_configmap_driver"
         "k8s-node"            -> "k8s_node_driver"
-        "url" | "kv" | "error" -> not expandable
+        "url"                 -> "url_driver"
+        "kv" | "error" | "raw" -> not expandable automatically
         otherwise            -> "text_driver"
     res = loadDriverForHandle(driver, h)
     return { resources: res, driver: driver }
@@ -248,9 +265,29 @@ POST /api/load { res_id, driver }:
     resources = loadDriverForBlob(driver, res_id)
     return { resources, driver, session }
 
-GET /api/data?handle=H&offset=O&length=L:
-    h     = store.getHandle(H)
-    bytes = serveChildRange(h, O, L)
+POST /api/openURL { url, driver }:
+    validate http:// or https:// URL (<= 8192 bytes, no control/whitespace)
+    fetch body with User-Agent "Datatree/1.0" up to DATATREE_MAX_URL_BYTES/upload limit and DATATREE_URL_TIMEOUT
+    classify payload by extension, Content-Type, and content signature
+    res_id = store fetched body in blob store
+    driver = validated requested driver, or auto-mapped driver (fallback text_driver)
+    resources = loadDriverForBlob(driver, res_id)
+    return { res_id, url, name, kind, size, content_type, status, resources, driver, session }
+
+POST /api/search { query, handles, extra_handles, max_depth, max_results, max_nodes }:
+    tokenize query into lowercase terms (match every term against name + kind)
+    skip external provider roots (aws, github, kubernetes, hardware, usb, url)
+    run bounded BFS (depth <= 12, results <= 500, scanned <= 10000, containers <= 40, timeout 3s)
+    walk subdirectories via fast os.ReadDir and materialize handles lazily via directory_driver
+    inspect safe archive/document containers up to budget
+    return { query, matches, scanned, truncated }
+
+GET /api/data?handle=H&offset=O&length=L (or res_id=R):
+    if res_id is present:
+        slice retained blob bytes for R at O..O+L
+    else:
+        h     = store.getHandle(H)
+        bytes = serveChildRange(h, O, L)
     write octet-stream
 ```
 
@@ -269,7 +306,7 @@ recursive_expand(resource_row):
     else:
         keep the selected row expanded
     for each rendered child in order:
-        if the child is expandable:
+        if the child is expandable and child.kind != "url":
             recursive_expand(child)
         else:
             leave the child unchanged
@@ -278,7 +315,7 @@ recursive_expand(resource_row):
 expand_or_collapse(resource_row):
     when opening, insert the child tree and change the arrow to down
     keep the down arrow for empty results and visible expansion errors
-    when closing, remove the child tree and change the arrow to right
+    when closing, cache the subtree snapshot in memory for Speedsearch, remove the child tree, and change the arrow to right
 
 copy_link(resource_path):
     encode up to 64 resource name and kind segments in a URL-safe fragment
@@ -345,7 +382,9 @@ range errors:
 
 ```
 on page load:
-    list upload-compatible drivers and fill the preview selector
+    load the shared format catalog before rendering resources
+    fill the preview selector with driver names and their usage descriptions
+    default uploads to AUTO: use a known filename extension, otherwise detect bytes
     show the active upload limits and explain their retention behavior
 
 on Upload and preview:
@@ -366,6 +405,17 @@ image: identify format and dimensions from the header
 pdf: validate version header; list reliable page count and absolute links
 html: list normalized title and unique absolute links without executing content
 csv: list dimensions; expose headings and rows as expandable JSON children
+tsv: same table view using tabs, with quoted tabs and multiline cells
+
+shared delimited table parsing:
+    parse records using the selected separator and standard quoting
+    ignore blank lines; preserve tab-only records as empty cells
+    first record supplies headings; assign unique names to empty or duplicate headings
+    list dimensions; expose headings and each data row as JSON children
+    preserve present cells as strings, uniquely name extra cells, omit missing cells
+    retain exact source bytes even when parsing fails
+    classify .tsv case-insensitively; offer TSV on uploads and all byte handles
+    allow JSON row children and their cell bytes to receive further filters
 ```
 
 ## Git repository browsing
@@ -532,7 +582,7 @@ AWS data query:
     explicitly report database-connection and state-changing SQS limitations
 
 Browser preview:
-    expanding text, HTML, binary, JSON, CSV, image or PDF also reads its content handle
+    expanding any byte format also reads its content handle
     page text and binary content in 64 KiB ranges through the entire resource
     render text and HTML source using text nodes, binary and split UTF-8 bytes as hexadecimal
     offer an explained filter selector on each readable child, defaulting to its ordinary kind
@@ -541,6 +591,67 @@ Browser preview:
     keep duplicate ZIP names independently servable; report corrupt or unreadable entries
     render images and PDFs through local blob URLs
     preserve nested driver results and revoke preview URLs when collapsing
+```
+
+Additional byte filters (full format contracts: FORMATS.md):
+
+```
+catalog:
+    define driver, resource kind, description, filename extensions and textual-input flag
+    use the catalog for host dispatch, file kinds, upload choices and gallery branches
+    expose metadata through GET /api/formats and driver names through GET /api/drivers
+
+auto:
+    match known binary signatures, then conservative document/text signatures
+    expose detected bytes as an ordinary child; unrecognized bytes are raw
+
+archives and compression:
+    TAR lists regular member bytes with distinct keys, never extracting or following links
+    GZIP, BZIP2, XZ, Zstandard, ZLIB and raw DEFLATE expose full decompressed bytes
+    use a stored GZIP filename or signatures to choose the next filter
+    ZIP-based documents and application packages route to ZIP, then member-specific readers
+
+structured documents:
+    XML validates one root; expose attributes, text/comments and original element slices
+    YAML lists documents, mapping pairs, sequences and scalar/binary contents
+    make compound YAML children self-contained; reject duplicate keys and cyclic/excessive aliases
+    TOML validates document-wide definitions; expose headings and typed JSON values
+    NDJSON validates each nonblank record and retains original line bytes
+
+configuration:
+    INI exposes section-qualified literal values and independent repeated keys
+    properties decodes ISO-8859-1, continuations, escapes and Unicode pairs
+    dotenv reads literal assignments/quotes without environment or command expansion
+
+messages:
+    email lists headers and recursively decodes MIME parts and attachments
+    classify actual attachment bytes by filename/media type/signature
+    mbox removes envelope lines and one mboxrd quoting prefix, then exposes messages
+
+encodings:
+    Base64, hex and URL form filters expose decoded bytes with independent repeated values
+    JSON-string filtering unquotes a serialized scalar into its actual UTF-8 contents
+    JWT exposes header, claims and signature with an explicit unverified notice
+    PEM validates every boundary and exposes each decoded block
+    ASN.1 exposes DER constructed children and scalar payload bytes
+    protobuf lists numbered wire fields without guessing a schema
+
+SQLite:
+    restore a complete snapshot into a separate memory-only database
+    enable query-only/defensive settings and disable trusted schema
+    list tables, rows and exact typed cell payloads, including binary BLOBs
+    serialize table/row containers as validated datatree-bytes-v1 bundles
+    reject provider/action kinds when opening bundles
+
+binary containers:
+    RIFF/RIFX/LIST validate sizes and expose padded chunk payloads
+    ISO media validates normal/extended box sizes and exposes nested structural boxes
+    retain unknown payloads as raw bytes without guessing field semantics
+
+all additional filters:
+    never execute document content, extract files, fetch links or alter the source
+    preserve exact source bytes alongside readable children or a visible parse error
+    allow every returned byte payload to receive another filter
 ```
 
 ```

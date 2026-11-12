@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	urldriver "datahumper/drivers_go/url_driver"
 )
 
 type handleRoute struct {
@@ -146,8 +148,8 @@ func openRoute(key []byte, token string) (handleRoute, error) {
 	switch err := json.Unmarshal(raw, &route); {
 	case err != nil:
 		return route, fmt.Errorf("invalid resource recovery route: %v", err)
-	case route.Version != 1 || len(route.Steps) == 0 || route.Steps[0].Driver != "root_driver" || (route.Root != "" && !filepath.IsAbs(route.Root)):
-		return route, fmt.Errorf("invalid resource recovery route: expected version 1, root driver and absolute root directory")
+	case route.Version != 1 || len(route.Steps) == 0 || route.Steps[0].Driver != "root_driver" || (route.Root != "" && !filepath.IsAbs(route.Root) && !urldriver.IsHTTPURL(route.Root)):
+		return route, fmt.Errorf("invalid resource recovery route: expected version 1, root driver and absolute root directory or URL")
 	default:
 	}
 	for _, step := range route.Steps {

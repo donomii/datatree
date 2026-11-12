@@ -269,22 +269,9 @@ func SliceRange(data []byte, offset int64, length int64) []byte {
 // KindForName classifies a filesystem or archive entry by extension, matching
 // the kind table in the spec so every driver routes files identically.
 func KindForName(name string) string {
-	ext := strings.ToLower(filepath.Ext(name))
-	switch ext {
-	case ".txt", ".md", ".log":
-		return "text"
-	case ".zip", ".tar", ".gz":
-		return "archive"
-	case ".jpg", ".jpeg", ".png", ".gif", ".bmp":
-		return "image"
-	case ".pdf":
-		return "pdf"
-	case ".html", ".htm":
-		return "html"
-	case ".json":
-		return "json"
-	case ".csv":
-		return "csv"
+	switch kind, known := FormatKindForName(name); {
+	case known:
+		return kind
 	default:
 		return "file"
 	}
