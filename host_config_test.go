@@ -47,12 +47,19 @@ func TestListDriversReturnsOnlyUploadCompatibleDrivers(t *testing.T) {
 	}
 }
 
-func TestLanceStructuredViewDoesNotDumpRawBytesByDefault(t *testing.T) {
+func TestStructuredViewsDoNotDumpRawBytesByDefault(t *testing.T) {
 	source := string(webIndex)
 	switch {
-	case !strings.Contains(source, "if (resource.kind === 'lance') {\n        return false;"):
-		t.Fatal("Lance browser view must skip the automatic raw-byte preview")
+	case !strings.Contains(source, "if (!['image', 'pdf'].includes(resource.kind)) {\n        return false;"):
+		t.Fatal("non-media browser views must skip the automatic raw-byte preview")
 	default:
+	}
+	for _, forbidden := range []string{"appendPagedContent", "Exact bytes (hexadecimal):", "Previous bytes", "Next bytes", "Binary content (hexadecimal):"} {
+		switch {
+		case strings.Contains(source, forbidden):
+			t.Fatalf("web UI still contains removed byte-preview code %q", forbidden)
+		default:
+		}
 	}
 }
 

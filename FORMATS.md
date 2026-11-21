@@ -2,7 +2,7 @@
 
 Use **Filter → Apply filter** on any readable resource. Each result can be filtered again, including archive members, decoded values, attachments, database cells and S3 objects. Every filter retains the complete original input in **[source bytes]**, including invalid input. Downloads always use the resource's byte handle.
 
-Uploads default to **AUTO**: known filename extensions choose their reader; otherwise signatures identify the bytes. Unknown files in the tree also use byte detection. Unrecognized data remains readable through the paged hexadecimal/text preview and explicit filters. No filter extracts files to disk, executes document content or fetches document links.
+Uploads default to **AUTO**: known filename extensions choose their reader; otherwise signatures identify the bytes. Unknown files in the tree also use byte detection. Raw bytes remain available through downloads and explicit filters but are never dumped automatically into an expanded tree. No filter extracts files to disk, executes document content or fetches document links.
 
 The selector explains each filter. Names are case insensitive for extension detection. `/api/formats` returns the same catalog used by the UI and gallery; `/api/drivers` retains its array of runnable filter names.
 

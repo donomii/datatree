@@ -1006,90 +1006,27 @@
       }
     }
 
-    async function appendPagedContent(container, resource, handle, blob = null, resID = '') {
-      const pageSize = 65536;
-      let offset = 0;
-      const preview = document.createElement('pre');
-      preview.style.cssText = 'white-space:pre-wrap;overflow-wrap:anywhere;max-height:60vh;overflow:auto';
-      preview.title = 'Exact file bytes as UTF-8 text, or hexadecimal for binary data and split UTF-8 sequences; HTML scripts are not executed';
-      const previous = document.createElement('button');
-      previous.textContent = 'Previous bytes';
-      previous.title = 'Read the preceding 64 KiB of this resource';
-      const next = document.createElement('button');
-      next.textContent = 'Next bytes';
-      next.title = 'Read the next 64 KiB; continue until the end of the resource';
-      const position = document.createElement('span');
-      position.title = 'Zero-based byte range currently shown; filters still receive the complete resource';
-      async function showPage(start) {
-        previous.disabled = next.disabled = true;
-        try {
-          const dataQuery = handle ? `handle=${encodeURIComponent(handle)}` : `res_id=${encodeURIComponent(resID)}`;
-          const response = blob ? new Response(blob.slice(start, start + pageSize)) : await fetch(`/api/data?${dataQuery}&offset=${start}&length=${pageSize}`);
-          if (!response.ok) {
-            throw new Error(await response.text());
-          } else {
-            const bytes = await response.arrayBuffer();
-            offset = start;
-            try {
-              preview.textContent = new TextDecoder('utf-8', {fatal: true}).decode(bytes);
-            } catch (error) {
-              preview.textContent = 'Exact bytes (hexadecimal):\n' + Array.from(new Uint8Array(bytes), byte => byte.toString(16).padStart(2, '0')).join(' ');
-            }
-            position.textContent = bytes.byteLength ? ` Bytes ${offset}–${offset + bytes.byteLength - 1} ` : ` End of data at byte ${offset} `;
-            previous.disabled = offset === 0;
-            next.disabled = bytes.byteLength < pageSize;
-          }
-        } catch (error) {
-          position.textContent = `Cannot read content: ${error.message}`;
-          previous.disabled = offset === 0;
-          next.disabled = false;
-        }
-      }
-      previous.onclick = () => showPage(Math.max(0, offset - pageSize));
-      next.onclick = () => showPage(offset + pageSize);
-      container.append(previous, position, next, preview);
-      await showPage(0);
-    }
-
     async function appendContentPreview(container, resource, handle, blob = null, resID = '') {
-      if (resource.kind === 'lance') {
+      if (!['image', 'pdf'].includes(resource.kind)) {
         return false;
       } else {
-        // Structured Lance metadata is the default view; raw bytes remain available as a child.
+        // Only browser-rendered media receives an automatic content preview.
       }
-      if (!['image', 'pdf'].includes(resource.kind)) {
-        await appendPagedContent(container, resource, handle, blob, resID);
-        return true;
-      } else {
-        // Media formats are rendered by the browser from complete bytes.
-      }
-      if (['text', 'file', 'html', 'image', 'pdf'].includes(resource.kind)) {
+      if (resource.kind === 'image' || resource.kind === 'pdf') {
         const dataQuery = handle ? `handle=${encodeURIComponent(handle)}` : `res_id=${encodeURIComponent(resID)}`;
         const response = blob ? new Response(blob) : await fetch(`/api/data?${dataQuery}&offset=0&length=-1`);
         if (!response.ok) {
           throw new Error(`Cannot read content: ${await response.text()}`);
         } else {
           const bytes = await response.arrayBuffer();
-          if (resource.kind === 'image' || resource.kind === 'pdf') {
-            const type = resource.kind === 'pdf' ? 'application/pdf' : '';
-            const url = URL.createObjectURL(new Blob([bytes], {type}));
-            const media = document.createElement(resource.kind === 'image' ? 'img' : 'iframe');
-            media.src = url;
-            media.title = `Contents of ${resource.name}`;
-            media.style.cssText = 'display:block;max-width:100%;width:100%;height:60vh;object-fit:contain';
-            container.appendChild(media);
-            container.previewURL = url;
-          } else {
-            const preview = document.createElement('pre');
-            preview.style.cssText = 'white-space:pre-wrap;overflow-wrap:anywhere;max-height:60vh;overflow:auto';
-            preview.title = 'File contents; HTML is displayed as source without running scripts';
-            try {
-              preview.textContent = new TextDecoder('utf-8', {fatal: true}).decode(bytes);
-            } catch (error) {
-              preview.textContent = 'Binary content (hexadecimal):\n' + Array.from(new Uint8Array(bytes), byte => byte.toString(16).padStart(2, '0')).join(' ');
-            }
-            container.appendChild(preview);
-          }
+          const type = resource.kind === 'pdf' ? 'application/pdf' : '';
+          const url = URL.createObjectURL(new Blob([bytes], {type}));
+          const media = document.createElement(resource.kind === 'image' ? 'img' : 'iframe');
+          media.src = url;
+          media.title = `Contents of ${resource.name}`;
+          media.style.cssText = 'display:block;max-width:100%;width:100%;height:60vh;object-fit:contain';
+          container.appendChild(media);
+          container.previewURL = url;
         }
         return true;
       } else {
