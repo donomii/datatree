@@ -9,4 +9,5 @@ func checked {command ... |
     }
 }
 cd $XSH_SCRIPT_DIR
+checked cargo build --release --manifest-path lance_helper/Cargo.toml
 checked go build -o datatree .

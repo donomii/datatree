@@ -35,7 +35,7 @@ func Parser(name string) (driverlib.ListFunc, bool) {
 		"jwt_driver": listJWT, "pem_driver": listPEM,
 		"asn1_driver": listASN1, "protobuf_driver": listProtobuf,
 		"sqlite_driver": listSQLite, "riff_driver": listRIFF,
-		"mp4_driver": listMP4,
+		"mp4_driver": listMP4, "lance_driver": listLance,
 	}
 	list, ok := parsers[name]
 	return list, ok

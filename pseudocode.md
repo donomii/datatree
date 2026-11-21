@@ -643,6 +643,16 @@ SQLite:
     serialize table/row containers as validated datatree-bytes-v1 bundles
     reject provider/action kinds when opening bundles
 
+Lance:
+    require a version 2 footer ending in LANC
+    validate column-metadata and global-buffer tables and every referenced byte range
+    decode global buffer zero as the FileDescriptor schema
+    pass the complete file to the source-built Lance row reader
+    expose every decoded row as an independently expandable JSON object
+    expose version, row count, schema, exact column metadata and global buffers
+    show structured metadata by default and expose complete source bytes only when explicitly opened
+    reject legacy versions, malformed footer data, malformed schema data and malformed row output
+
 binary containers:
     RIFF/RIFX/LIST validate sizes and expose padded chunk payloads
     ISO media validates normal/extended box sizes and exposes nested structural boxes

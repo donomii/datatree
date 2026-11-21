@@ -2,6 +2,7 @@ package main
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -38,10 +39,19 @@ func TestListDriversReturnsOnlyUploadCompatibleDrivers(t *testing.T) {
 	store := NewStore()
 	got := store.listDrivers()
 	want := []string{"diff_driver", "zip_driver", "text_driver", "json_driver", "image_driver", "pdf_driver", "html_driver", "csv_driver", "tsv_driver"}
-	want = append(want, "auto_driver", "bundle_driver", "jsonstring_driver", "tar_driver", "gzip_driver", "bzip2_driver", "xz_driver", "zstd_driver", "zlib_driver", "deflate_driver", "xml_driver", "yaml_driver", "toml_driver", "ndjson_driver", "ini_driver", "properties_driver", "dotenv_driver", "email_driver", "mbox_driver", "base64_driver", "hex_driver", "urlencoded_driver", "jwt_driver", "pem_driver", "asn1_driver", "protobuf_driver", "sqlite_driver", "riff_driver", "mp4_driver")
+	want = append(want, "auto_driver", "bundle_driver", "jsonstring_driver", "tar_driver", "gzip_driver", "bzip2_driver", "xz_driver", "zstd_driver", "zlib_driver", "deflate_driver", "xml_driver", "yaml_driver", "toml_driver", "ndjson_driver", "ini_driver", "properties_driver", "dotenv_driver", "email_driver", "mbox_driver", "base64_driver", "hex_driver", "urlencoded_driver", "jwt_driver", "pem_driver", "asn1_driver", "protobuf_driver", "sqlite_driver", "riff_driver", "mp4_driver", "lance_driver")
 	switch {
 	case !reflect.DeepEqual(got, want):
 		t.Fatalf("upload driver list mismatch: got %v expected %v", got, want)
+	default:
+	}
+}
+
+func TestLanceStructuredViewDoesNotDumpRawBytesByDefault(t *testing.T) {
+	source := string(webIndex)
+	switch {
+	case !strings.Contains(source, "if (resource.kind === 'lance') {\n        return false;"):
+		t.Fatal("Lance browser view must skip the automatic raw-byte preview")
 	default:
 	}
 }

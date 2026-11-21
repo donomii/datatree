@@ -156,7 +156,7 @@ func isSearchableContainerKind(kind string) bool {
 	case "archive", "zip", "tar", "gzip", "bzip2", "xz", "zstd", "zlib", "deflate",
 		"json", "ndjson", "yaml", "toml", "xml", "ini", "properties", "dotenv",
 		"email", "mbox", "csv", "tsv", "html", "pdf", "text", "diff",
-		"sqlite", "bundle", "riff", "mp4", "asn1", "jwt", "pem", "urlencoded",
+		"sqlite", "bundle", "riff", "mp4", "lance", "asn1", "jwt", "pem", "urlencoded",
 		"base64", "hex", "jsonstring", "k8s-pod", "k8s-workload", "k8s-service",
 		"k8s-configmap", "k8s-node":
 		return true

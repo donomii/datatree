@@ -91,7 +91,7 @@ func TestMalformedInputsKeepSourceAndReportErrors(t *testing.T) {
 		"xml_driver": "<root><bad></root>", "yaml_driver": "a: [unfinished", "toml_driver": "a=1\na=2", "ndjson_driver": "{}\nnot json",
 		"ini_driver": "invalid entry", "properties_driver": `a=\uXYZW`, "dotenv_driver": "A='unterminated", "email_driver": "bad header\n\ntext", "mbox_driver": "missing envelope",
 		"base64_driver": "!invalid!", "hex_driver": "ABC", "urlencoded_driver": "a=%ZZ", "jwt_driver": "x.y.z", "pem_driver": "-----BEGIN INVALID-----\n!\n-----END INVALID-----",
-		"asn1_driver": string([]byte{0x30, 0x80}), "protobuf_driver": string([]byte{10, 100}), "sqlite_driver": "not sqlite", "riff_driver": "RIFF", "mp4_driver": "bad", "bundle_driver": `{"format":"other"}`, "jsonstring_driver": "42",
+		"asn1_driver": string([]byte{0x30, 0x80}), "protobuf_driver": string([]byte{10, 100}), "sqlite_driver": "not sqlite", "riff_driver": "RIFF", "mp4_driver": "bad", "lance_driver": "bad", "bundle_driver": `{"format":"other"}`, "jsonstring_driver": "42",
 	}
 	for name, input := range fixtures {
 		t.Run(name, func(t *testing.T) {

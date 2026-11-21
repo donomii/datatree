@@ -8,7 +8,7 @@ The selector explains each filter. Names are case insensitive for extension dete
 
 | Filter | Contents exposed |
 | --- | --- |
-| AUTO | Detected document, or unrecognized raw bytes. Recognizes ZIP, GZIP, BZIP2, XZ, Zstandard, TAR, SQLite, RIFF, MP4, PDF, common images, PEM, JSON, HTML, XML, YAML document markers and UTF-8 text. |
+| AUTO | Detected document, or unrecognized raw bytes. Recognizes ZIP, GZIP, BZIP2, XZ, Zstandard, TAR, SQLite, Lance, RIFF, MP4, PDF, common images, PEM, JSON, HTML, XML, YAML document markers and UTF-8 text. |
 | ZIP / archive | Original member bytes, with independent handles for duplicate names. Includes DOCX/XLSX/PPTX, their macro-enabled variants, OpenDocument, EPUB, JAR/WAR/EAR, APK/AAB/IPA, Python wheels, NuGet, VSIX, KMZ and CBZ. Document internals are browsed as archive members, not rendered as an office application would. |
 | TAR | Regular member bytes; link targets as text, without following them. Special entry types are identified. Duplicate member names remain independent. |
 | GZIP | Complete decompressed stream. A stored filename chooses its kind; otherwise signatures detect it. Concatenated members are decoded in stream order. |
@@ -34,6 +34,7 @@ The selector explains each filter. Names are case insensitive for extension dete
 | ASN.1 | DER classes, tags, constructed children and scalar content bytes. Certificates and unencrypted key structures can be traversed without assuming a schema. Indefinite BER lengths are not DER and are rejected. |
 | Protocol Buffers | Numbered wire fields: varints, fixed32, fixed64 and exact length-delimited bytes. No field names, signedness, float types or nested schema are guessed. Deprecated groups are explicitly rejected. |
 | SQLite | Tables → rows → cell bytes, including exact BLOBs, text bytes, numeric values and null. Identifiers are quoted. Reads use a separate in-memory SQLite engine with query-only mode, defensive settings, no trusted schema and memory temp storage. The input snapshot is not modified. A complete standalone database is required; separate WAL/journal files and encrypted databases are not combined or decrypted. Unsupported virtual tables report their read error. |
+| Lance | Version 2 rows as independently expandable JSON objects, plus row count, schema, field metadata, exact column-metadata protobufs and global buffers. Lance's source-built Rust reader decodes the column pages. The default view shows this structure without dumping the file bytes. Complete source remains available under **[source bytes]**. |
 | Byte bundle | Lossless generated containers used for SQLite tables and rows. Cell data is Base64 in the serialized container and becomes actual byte children when opened. Provider/action descriptors are rejected. |
 | RIFF | RIFF/RIFX and LIST chunks, including WAVE, AVI and WebP, with padding and declared-length validation. Chunk payloads retain their original bytes. |
 | MP4 / ISO media | ISO base media boxes, including extended sizes and nested structural boxes, for MP4, MOV, M4A, AVIF and HEIF. Unknown box payloads stay raw; media is not transcoded. |

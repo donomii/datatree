@@ -13,3 +13,4 @@ cd $XSH_SCRIPT_DIR
 checked xsh build.xsh
 checked mkdir -p "$HOME/.local/bin"
 checked install -m 755 datatree "$HOME/.local/bin/datatree"
+checked install -m 755 lance_helper/target/release/datatree-lance-helper "$HOME/.local/bin/datatree-lance-helper"

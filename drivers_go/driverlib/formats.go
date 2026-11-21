@@ -39,6 +39,7 @@ func AdditionalFilters() []FilterInfo {
 		{"sqlite_driver", "sqlite", "Browse SQLite tables, rows and exact BLOB cells in an isolated read-only in-memory database.", []string{".sqlite", ".sqlite3", ".db", ".db3"}, false},
 		{"riff_driver", "riff", "Browse RIFF chunks in WAVE, AVI and WebP containers as original bytes.", []string{".wav", ".wave", ".avi"}, false},
 		{"mp4_driver", "mp4", "Browse ISO base media boxes in MP4, MOV, M4A, AVIF and HEIF containers as original bytes.", []string{".mp4", ".mov", ".m4a", ".m4v", ".heic", ".heif", ".avif"}, false},
+		{"lance_driver", "lance", "Browse Lance version 2 rows, schema, column metadata and global buffers while retaining the complete source file.", []string{".lance"}, false},
 	}
 }
 
@@ -97,6 +98,8 @@ func DetectKind(raw []byte) string {
 		return "tar"
 	case len(raw) >= 12 && string(raw[4:8]) == "ftyp":
 		return "mp4"
+	case len(raw) >= 40 && string(raw[len(raw)-4:]) == "LANC":
+		return "lance"
 	case bytes.HasPrefix(trimmed, []byte("-----BEGIN ")):
 		return "pem"
 	case json.Valid(trimmed):

@@ -1052,6 +1052,11 @@
     }
 
     async function appendContentPreview(container, resource, handle, blob = null, resID = '') {
+      if (resource.kind === 'lance') {
+        return false;
+      } else {
+        // Structured Lance metadata is the default view; raw bytes remain available as a child.
+      }
       if (!['image', 'pdf'].includes(resource.kind)) {
         await appendPagedContent(container, resource, handle, blob, resID);
         return true;
