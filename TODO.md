@@ -14,4 +14,6 @@ Completed 2026-07-20: inactive driver sessions are cleaned up after the configur
 
 Completed 2026-07-25: read-only Git repository browsing detects working trees and exposes commits, committed files, staged changes, unstaged changes, untracked files, and conflicts, with exact historical, index, and working-tree bytes behind file rows.
 
+Completed 2026-11-12: Datatree.app (`install_app.py`, `app/Datatree.swift`) launches Datatree as a normal macOS app from /Applications, with a Dock icon, browser reopen, a log in ~/Library/Logs/Datatree, restart after an unexpected exit, and server shutdown on Quit.
+
 Completed 2026-07-25: the installer smoke test verifies relocated installed driver and web UI fallback paths in the foreground, including installed root and JSON driver execution.
