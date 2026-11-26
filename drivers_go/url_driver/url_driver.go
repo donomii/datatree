@@ -2,9 +2,11 @@
 package urldriver
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"mime"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -19,6 +21,11 @@ import (
 const defaultMaxURLBytes int64 = 64 * 1024 * 1024
 const defaultURLTimeout = 30 * time.Second
 const maxURLLength = 8192
+const maxURLRedirects = 10
+
+// allowPrivateIPsForTest allows unit tests using httptest.NewServer on loopback
+// addresses to opt out of private/loopback IP blocking. Production leaves this false.
+var allowPrivateIPsForTest bool
 
 type FetchResult struct {
 	FinalURL    string
@@ -104,6 +111,98 @@ func ResolveTimeout() time.Duration {
 	}
 }
 
+func isBlockedIP(ip net.IP) bool {
+	if ip == nil {
+		return true
+	}
+	if ip4 := ip.To4(); ip4 != nil {
+		ip = ip4
+	}
+	return ip.IsLoopback() ||
+		ip.IsPrivate() ||
+		ip.IsLinkLocalUnicast() ||
+		ip.IsLinkLocalMulticast() ||
+		ip.IsMulticast() ||
+		ip.IsUnspecified()
+}
+
+func resolveAllowedIPs(ctx context.Context, host string) ([]net.IP, error) {
+	if ip := net.ParseIP(host); ip != nil {
+		if !allowPrivateIPsForTest && isBlockedIP(ip) {
+			return nil, fmt.Errorf("blocked request to non-public IP address %s", ip.String())
+		}
+		return []net.IP{ip}, nil
+	}
+	addrs, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+	if len(addrs) == 0 {
+		return nil, fmt.Errorf("host %q did not resolve to any IP address", host)
+	}
+	allowed := make([]net.IP, 0, len(addrs))
+	for _, addr := range addrs {
+		if !allowPrivateIPsForTest && isBlockedIP(addr.IP) {
+			return nil, fmt.Errorf("blocked request to host %q resolving to non-public IP address %s", host, addr.IP.String())
+		}
+		allowed = append(allowed, addr.IP)
+	}
+	return allowed, nil
+}
+
+func safeDialContext(dialer *net.Dialer) func(ctx context.Context, network, address string) (net.Conn, error) {
+	return func(ctx context.Context, network, address string) (net.Conn, error) {
+		host, port, err := net.SplitHostPort(address)
+		if err != nil {
+			return nil, err
+		}
+		ips, err := resolveAllowedIPs(ctx, host)
+		if err != nil {
+			return nil, err
+		}
+		var lastErr error
+		for _, ip := range ips {
+			conn, dialErr := dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+			if dialErr == nil {
+				return conn, nil
+			}
+			lastErr = dialErr
+		}
+		return nil, lastErr
+	}
+}
+
+func checkURLRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= maxURLRedirects {
+		return fmt.Errorf("stopped after %d redirects", maxURLRedirects)
+	}
+	if req.URL == nil {
+		return fmt.Errorf("redirect target has empty URL")
+	}
+	parsed, err := ValidateURL(req.URL.String())
+	if err != nil {
+		return fmt.Errorf("blocked redirect target: %v", err)
+	}
+	if _, err := resolveAllowedIPs(req.Context(), parsed.Hostname()); err != nil {
+		return fmt.Errorf("blocked redirect target %q: %v", parsed.String(), err)
+	}
+	return nil
+}
+
+func newSafeHTTPClient(timeout time.Duration) *http.Client {
+	dialer := &net.Dialer{
+		Timeout:   timeout,
+		KeepAlive: 30 * time.Second,
+	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.DialContext = safeDialContext(dialer)
+	return &http.Client{
+		Timeout:       timeout,
+		Transport:     transport,
+		CheckRedirect: checkURLRedirect,
+	}
+}
+
 func FetchURL(rawURL string, maxBytes int64, timeout time.Duration) (FetchResult, error) {
 	parsed, err := ValidateURL(rawURL)
 	if err != nil {
@@ -119,7 +218,7 @@ func FetchURL(rawURL string, maxBytes int64, timeout time.Duration) (FetchResult
 		} else {
 			// Retain caller's positive request timeout.
 		}
-		client := &http.Client{Timeout: timeout}
+		client := newSafeHTTPClient(timeout)
 		req, reqErr := http.NewRequest(http.MethodGet, parsed.String(), nil)
 		if reqErr != nil {
 			return FetchResult{}, fmt.Errorf("cannot build HTTP GET request for %q: %v", parsed.String(), reqErr)

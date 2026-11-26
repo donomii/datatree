@@ -365,10 +365,7 @@ func InsideGitWorkTree(dirPath string) bool {
 	}
 }
 
-// InsideBase reports whether targetPath resolves inside basePath using
-// path-segment-aware relative path checks, so "..", absolute escapes, and
-// sibling prefixes are all rejected.
-func InsideBase(basePath string, targetPath string) bool {
+func insideBaseLexical(basePath string, targetPath string) bool {
 	rel, err := filepath.Rel(basePath, targetPath)
 	switch {
 	case err != nil:
@@ -384,6 +381,24 @@ func InsideBase(basePath string, targetPath string) bool {
 	default:
 		return true
 	}
+}
+
+// InsideBase reports whether targetPath resolves inside basePath using
+// path-segment-aware relative path checks and symlink resolution, so "..",
+// absolute escapes, sibling prefixes, and symlink escapes are all rejected.
+func InsideBase(basePath string, targetPath string) bool {
+	if !insideBaseLexical(basePath, targetPath) {
+		return false
+	}
+	resolvedBase, err := filepath.EvalSymlinks(basePath)
+	if err != nil {
+		return false
+	}
+	resolvedTarget, err := filepath.EvalSymlinks(targetPath)
+	if err != nil {
+		return false
+	}
+	return insideBaseLexical(resolvedBase, resolvedTarget)
 }
 
 // ServeFileChild answers one range request for a filesystem child that has

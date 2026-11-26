@@ -97,14 +97,32 @@ func Run() {
 		default:
 		}
 
-		// Security check: ensure path is still within the directory
-		cleanPath, err := filepath.Abs(filepath.Join(dirPath, req.Child))
+		// Security check: ensure path is still within the directory (including symlink resolution)
+		cleanPath, ok := resolveChildPath(dirPath, req.Child)
 		switch {
-		case err != nil || !driverlib.InsideBase(dirPath, cleanPath):
+		case !ok:
 			driverlib.SendRange(enc, nil)
 		default:
 			// Directories are served as their path bytes, files as bytes
 			driverlib.ServeFileChild(enc, cleanPath, req.Offset, req.Length)
 		}
 	}
+}
+
+func resolveChildPath(dirPath string, child string) (string, bool) {
+	if child == "" {
+		return "", false
+	}
+	cleanPath, err := filepath.Abs(filepath.Join(dirPath, child))
+	if err != nil {
+		return "", false
+	}
+	if !driverlib.InsideBase(dirPath, cleanPath) {
+		return "", false
+	}
+	resolved, err := filepath.EvalSymlinks(cleanPath)
+	if err != nil {
+		return "", false
+	}
+	return resolved, true
 }

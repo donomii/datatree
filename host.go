@@ -1238,31 +1238,7 @@ func main() {
 	})
 
 	// load a driver on an uploaded blob
-	mux.HandleFunc("/api/load", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "POST required for /api/load", http.StatusMethodNotAllowed)
-			return
-		}
-		var req struct {
-			ResID  string `json:"res_id"`
-			Driver string `json:"driver"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, fmt.Sprintf("cannot decode /api/load request: expected JSON with res_id and driver, got error: %v", err), 400)
-			return
-		}
-		if _, ok := store.getBlob(req.ResID); !ok {
-			http.Error(w, fmt.Sprintf("cannot load driver %s: uploaded resource id %s is unknown", req.Driver, req.ResID), 404)
-			return
-		}
-		res, err := store.loadDriverForBlob(req.Driver, req.ResID)
-		if err != nil {
-			http.Error(w, fmt.Sprintf("cannot load driver %s on uploaded resource %s: %v", req.Driver, req.ResID, err), 500)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(LoadResponse{Resources: res, Driver: req.Driver, Session: fmt.Sprintf("%s_%s", req.Driver, req.ResID)})
-	})
+	mux.HandleFunc("/api/load", loadHandler(store))
 
 	// list root resources
 	mux.HandleFunc("/api/list", func(w http.ResponseWriter, r *http.Request) {
@@ -1286,98 +1262,13 @@ func main() {
 	})
 
 	// auto-load appropriate driver for a handle
-	mux.HandleFunc("/api/autoLoad", func(w http.ResponseWriter, r *http.Request) {
-		var req struct {
-			Handle string `json:"handle"`
-			Kind   string `json:"kind"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, err.Error(), 400)
-			return
-		}
-		h, recoveryErr := store.resolveHandle(req.Handle)
-		if recoveryErr != nil {
-			http.Error(w, recoveryErr.Error(), 404)
-			return
-		}
-
-		// Get the appropriate driver for this kind
-		driver, expandable := driverForKind(req.Kind)
-		if !expandable {
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(LoadResponse{Resources: []Resource{}, Driver: "leaf", Session: ""})
-			return
-		}
-
-		res, err := store.loadDriverForHandle(driver, h)
-		if err != nil {
-			http.Error(w, err.Error(), 500)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(LoadResponse{Resources: res, Driver: driver, Session: fmt.Sprintf("%s_%s", driver, h.Hid)})
-	})
+	mux.HandleFunc("/api/autoLoad", autoLoadHandler(store))
 
 	// load a selected driver on a child handle
-	mux.HandleFunc("/api/loadChild", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "POST required for /api/loadChild", http.StatusMethodNotAllowed)
-			return
-		}
-		var req struct {
-			Handle string `json:"handle"`
-			Kind   string `json:"kind"`
-			Driver string `json:"driver"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, fmt.Sprintf("cannot decode /api/loadChild request: expected JSON with handle and optional driver, got error: %v", err), 400)
-			return
-		}
-		h, recoveryErr := store.resolveHandle(req.Handle)
-		if recoveryErr != nil {
-			http.Error(w, recoveryErr.Error(), 404)
-			return
-		}
-		driver := req.Driver
-		if driver == "" {
-			var expandable bool
-			kind := req.Kind
-			if kind == "" {
-				kind = h.Kind
-			}
-			driver, expandable = driverForKind(kind)
-			if !expandable {
-				w.Header().Set("Content-Type", "application/json")
-				_ = json.NewEncoder(w).Encode(LoadResponse{Resources: []Resource{}, Driver: "leaf", Session: ""})
-				return
-			}
-		}
-		res, err := store.loadDriverForHandle(driver, h)
-		if err != nil {
-			http.Error(w, fmt.Sprintf("cannot load driver %s on handle %s child %s: %v", driver, h.Hid, h.ChildName, err), 500)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(LoadResponse{Resources: res, Driver: driver, Session: fmt.Sprintf("%s_%s", driver, h.Hid)})
-	})
+	mux.HandleFunc("/api/loadChild", loadChildHandler(store))
 
 	// unload a running driver session
-	mux.HandleFunc("/api/unload", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "POST required for /api/unload", http.StatusMethodNotAllowed)
-			return
-		}
-		var req struct {
-			Session string `json:"session"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, fmt.Sprintf("cannot decode /api/unload request: expected JSON with session, got error: %v", err), 400)
-			return
-		}
-		stopped := store.stopDriver(req.Session)
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(UnloadResponse{Session: req.Session, Stopped: stopped})
-	})
+	mux.HandleFunc("/api/unload", unloadHandler(store))
 
 	mux.HandleFunc("/api/github/action", githubActionHandler(store))
 	mux.HandleFunc("/api/aws/action", awsActionHandler(store))
@@ -1439,7 +1330,176 @@ func main() {
 		logBrowserOpenFailure(url, err)
 	default:
 	}
-	logHTTPServerFailure(url, http.Serve(listener, browserHandler(mux, listener.Addr().(*net.TCPAddr))))
+	server := newHTTPServer(browserHandler(mux, listener.Addr().(*net.TCPAddr)))
+	logHTTPServerFailure(url, server.Serve(listener))
+}
+
+const maxAPIJSONRequestBytes int64 = 64 * 1024
+
+func isUploadDriver(driver string) bool {
+	for _, allowed := range uploadDriverNames {
+		if allowed == driver {
+			return true
+		}
+	}
+	return false
+}
+
+func isAllowedChildDriver(driver string, handleKind string) bool {
+	if isUploadDriver(driver) {
+		return true
+	}
+	trustedDriver, expandable := driverForKind(handleKind)
+	return expandable && trustedDriver == driver
+}
+
+func loadHandler(store *Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST required for /api/load", http.StatusMethodNotAllowed)
+			return
+		}
+		var req struct {
+			ResID  string `json:"res_id"`
+			Driver string `json:"driver"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, maxAPIJSONRequestBytes+1)).Decode(&req); err != nil {
+			http.Error(w, fmt.Sprintf("cannot decode /api/load request: expected JSON with res_id and driver, got error: %v", err), http.StatusBadRequest)
+			return
+		}
+		if !isUploadDriver(req.Driver) {
+			http.Error(w, fmt.Sprintf("cannot load unsupported driver %q on uploaded resource: expected an upload-compatible driver", req.Driver), http.StatusBadRequest)
+			return
+		}
+		if _, ok := store.getBlob(req.ResID); !ok {
+			http.Error(w, fmt.Sprintf("cannot load driver %s: uploaded resource id %s is unknown", req.Driver, req.ResID), http.StatusNotFound)
+			return
+		}
+		res, err := store.loadDriverForBlob(req.Driver, req.ResID)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("cannot load driver %s on uploaded resource %s: %v", req.Driver, req.ResID, err), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(LoadResponse{Resources: res, Driver: req.Driver, Session: fmt.Sprintf("%s_%s", req.Driver, req.ResID)})
+	}
+}
+
+func autoLoadHandler(store *Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Handle string `json:"handle"`
+			Kind   string `json:"kind"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, maxAPIJSONRequestBytes+1)).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		h, recoveryErr := store.resolveHandle(req.Handle)
+		if recoveryErr != nil {
+			http.Error(w, recoveryErr.Error(), http.StatusNotFound)
+			return
+		}
+
+		// Get the appropriate driver for this kind
+		kind := req.Kind
+		if kind == "" {
+			kind = h.Kind
+		}
+		driver, expandable := driverForKind(kind)
+		if !expandable {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(LoadResponse{Resources: []Resource{}, Driver: "leaf", Session: ""})
+			return
+		}
+		if !isAllowedChildDriver(driver, h.Kind) {
+			http.Error(w, fmt.Sprintf("cannot auto-load driver %q for handle %s of kind %q", driver, h.Hid, h.Kind), http.StatusBadRequest)
+			return
+		}
+
+		res, err := store.loadDriverForHandle(driver, h)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(LoadResponse{Resources: res, Driver: driver, Session: fmt.Sprintf("%s_%s", driver, h.Hid)})
+	}
+}
+
+func loadChildHandler(store *Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST required for /api/loadChild", http.StatusMethodNotAllowed)
+			return
+		}
+		var req struct {
+			Handle string `json:"handle"`
+			Kind   string `json:"kind"`
+			Driver string `json:"driver"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, maxAPIJSONRequestBytes+1)).Decode(&req); err != nil {
+			http.Error(w, fmt.Sprintf("cannot decode /api/loadChild request: expected JSON with handle and optional driver, got error: %v", err), http.StatusBadRequest)
+			return
+		}
+		h, recoveryErr := store.resolveHandle(req.Handle)
+		if recoveryErr != nil {
+			http.Error(w, recoveryErr.Error(), http.StatusNotFound)
+			return
+		}
+		driver := req.Driver
+		if driver == "" {
+			var expandable bool
+			kind := req.Kind
+			if kind == "" {
+				kind = h.Kind
+			}
+			driver, expandable = driverForKind(kind)
+			if !expandable {
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(LoadResponse{Resources: []Resource{}, Driver: "leaf", Session: ""})
+				return
+			}
+		}
+		if !isAllowedChildDriver(driver, h.Kind) {
+			http.Error(w, fmt.Sprintf("cannot load unsupported driver %q on handle %s of kind %q", driver, h.Hid, h.Kind), http.StatusBadRequest)
+			return
+		}
+		res, err := store.loadDriverForHandle(driver, h)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("cannot load driver %s on handle %s child %s: %v", driver, h.Hid, h.ChildName, err), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(LoadResponse{Resources: res, Driver: driver, Session: fmt.Sprintf("%s_%s", driver, h.Hid)})
+	}
+}
+
+func unloadHandler(store *Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST required for /api/unload", http.StatusMethodNotAllowed)
+			return
+		}
+		var req struct {
+			Session string `json:"session"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, maxAPIJSONRequestBytes+1)).Decode(&req); err != nil {
+			http.Error(w, fmt.Sprintf("cannot decode /api/unload request: expected JSON with session, got error: %v", err), http.StatusBadRequest)
+			return
+		}
+		stopped := store.stopDriver(req.Session)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(UnloadResponse{Session: req.Session, Stopped: stopped})
+	}
+}
+
+func newHTTPServer(handler http.Handler) *http.Server {
+	return &http.Server{
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
 }
 
 const maxGitHubActionRequestBytes int64 = 70 * 1024
